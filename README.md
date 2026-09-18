@@ -35,4 +35,4 @@ python -m unittest discover -s tests -v
 - `index.html`、`app.js`、`styles.css`：浏览器界面。
 - `tests/test_service.py`、`tests/test_http.py`：业务与越权测试。
 
-分支采用 `main` 与 `feature/US-01-E01-access`。提交历史保留在压缩包的 `.git` 目录中。正式合并需团队按实验一 DEC-009 通过 PR、至少一名非作者评审及 CI。
+分支采用 `main`、`feature/US-01-auth-core` 和后续的 `feature/US-04-E01-interface`。两层差异分别为 387 行和 194 行，符合实验一 DEC-009 的单次 PR 不超过 400 行约束。提交历史保留在压缩包的 `.git` 目录中。正式合并需团队通过 PR、至少一名非作者评审及 CI；本压缩包保留在功能分支，未冒充已合入主干。
