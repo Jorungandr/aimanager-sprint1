@@ -64,6 +64,9 @@ class Handler(BaseHTTPRequestHandler):
             raise AppError('请先登录。', 401)
         return self.store.get_user(user_id)
 
+    def user_with_capabilities(self, user):
+        return {**user, **self.store.capabilities(user)}
+
     def serve_file(self, path):
         allowed = {'/': ('index.html', 'text/html'), '/index.html': ('index.html', 'text/html'),
                    '/app.js': ('app.js', 'text/javascript'), '/styles.css': ('styles.css', 'text/css')}
@@ -99,25 +102,39 @@ class Handler(BaseHTTPRequestHandler):
 
             user = self.user()
             if method == 'GET' and path == '/api/me':
-                return self.reply(user)
+                return self.reply(self.user_with_capabilities(user))
             if path == '/api/users':
                 self.store.require_admin(user)
                 if method == 'GET': return self.reply(self.store.list_users())
                 if method == 'POST':
                     data = self.payload(); return self.reply(self.store.create_user(data.get('email', ''), data.get('password', '')), 201)
+            if method == 'GET' and path == '/api/user-options':
+                if not self.store.has_global_permission(user, 'members.manage'):
+                    raise AppError('需要成员管理权限。', 403)
+                return self.reply(self.store.list_users())
             if path == '/api/roles':
-                if method == 'GET': return self.reply(self.store.list_roles())
+                if method == 'GET':
+                    if not self.store.has_global_permission(user, 'roles.manage'):
+                        raise AppError('需要角色管理权限。', 403)
+                    return self.reply(self.store.list_roles())
                 if method == 'POST':
-                    self.store.require_admin(user); return self.reply(self.store.create_role(self.payload().get('name', '')), 201)
+                    if not self.store.has_global_permission(user, 'roles.manage'):
+                        raise AppError('需要角色管理权限。', 403)
+                    return self.reply(self.store.create_role(self.payload().get('name', '')), 201)
+            if method == 'GET' and path == '/api/role-options':
+                return self.reply([{'id': role['id'], 'name': role['name']} for role in self.store.list_roles()])
             match = re.fullmatch(r'/api/roles/(\d+)/permissions', path)
             if match and method == 'PUT':
-                self.store.require_admin(user)
+                if not self.store.has_global_permission(user, 'roles.manage'):
+                    raise AppError('需要角色管理权限。', 403)
                 self.store.set_permissions(int(match.group(1)), self.payload().get('permissions'))
                 return self.reply({'ok': True})
             if path == '/api/projects':
                 if method == 'GET': return self.reply(self.store.list_projects(user))
                 if method == 'POST':
-                    self.store.require_admin(user); return self.reply(self.store.create_project(self.payload().get('name', '')), 201)
+                    if not self.store.has_global_permission(user, 'projects.manage'):
+                        raise AppError('需要项目管理权限。', 403)
+                    return self.reply(self.store.create_project(self.payload().get('name', '')), 201)
             match = re.fullmatch(r'/api/projects/(\d+)/manage-check', path)
             if match and method == 'GET':
                 self.store.require_permission(user, int(match.group(1)), 'members.manage')

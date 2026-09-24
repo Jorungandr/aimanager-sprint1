@@ -34,7 +34,8 @@ class HttpTests(unittest.TestCase):
             with opener.open(request) as response:
                 return response.status, json.load(response)
         except HTTPError as error:
-            return error.code, json.load(error)
+            with error:
+                return error.code, json.load(error)
 
     def test_member_cannot_edit_roles_or_members_and_loses_access_on_removal(self):
         self.assertEqual(self.req(self.admin, '/api/setup', 'POST',
@@ -49,12 +50,31 @@ class HttpTests(unittest.TestCase):
         self.req(self.member, '/api/login', 'POST',
                  {'email': 'member@example.test', 'password': 'MemberPass123'})
         self.assertEqual(self.req(self.member, f"/api/projects/{project['id']}/members")[0], 200)
+        self.assertEqual(self.req(self.member, '/api/roles')[0], 403)
         self.assertEqual(self.req(self.member, '/api/roles', 'POST', {'name': '伪管理员'})[0], 403)
         self.assertEqual(self.req(self.member, f"/api/projects/{project['id']}/manage-check")[0], 403)
         self.assertEqual(self.req(self.member, f"/api/projects/{project['id']}/members", 'POST',
                                   {'user_id': user['id'], 'role_id': role['id']})[0], 403)
         self.assertEqual(self.req(self.admin, f"/api/projects/{project['id']}/members/{user['id']}", 'DELETE')[0], 200)
         self.assertEqual(self.req(self.member, f"/api/projects/{project['id']}/members")[0], 403)
+
+    def test_granted_management_permissions_apply_on_server(self):
+        self.assertEqual(self.req(self.admin, '/api/setup', 'POST',
+                                  {'email': 'admin@example.test', 'password': 'AdminPass123'})[0], 201)
+        _, manager = self.req(self.admin, '/api/users', 'POST',
+                              {'email': 'manager@example.test', 'password': 'ManagerPass123'})
+        _, role = self.req(self.admin, '/api/roles', 'POST', {'name': '项目经理'})
+        self.req(self.admin, f"/api/roles/{role['id']}/permissions", 'PUT',
+                 {'permissions': ['project.view', 'members.manage', 'projects.manage', 'roles.manage']})
+        _, project = self.req(self.admin, '/api/projects', 'POST', {'name': '蜂鸟'})
+        self.req(self.admin, f"/api/projects/{project['id']}/members", 'POST',
+                 {'user_id': manager['id'], 'role_id': role['id']})
+        self.req(self.member, '/api/login', 'POST',
+                 {'email': 'manager@example.test', 'password': 'ManagerPass123'})
+        self.assertEqual(self.req(self.member, '/api/roles')[0], 200)
+        self.assertEqual(self.req(self.member, '/api/user-options')[0], 200)
+        self.assertEqual(self.req(self.member, '/api/roles', 'POST', {'name': '观察者'})[0], 201)
+        self.assertEqual(self.req(self.member, '/api/projects', 'POST', {'name': '新项目'})[0], 201)
 
 
 if __name__ == '__main__': unittest.main()
