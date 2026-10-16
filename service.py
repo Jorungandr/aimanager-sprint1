@@ -1,11 +1,14 @@
-"""E01 数据与权限规则。数据库查询统一使用参数绑定。"""
+"""Sprint 1 权限基线与 Sprint 2 协作增量。查询统一使用参数绑定。"""
+from datetime import date
 import hashlib
 import hmac
 import os
 import re
 import sqlite3
 
-PERMISSIONS = ('project.view', 'members.manage', 'projects.manage', 'roles.manage')
+PERMISSIONS = ('project.view', 'members.manage', 'projects.manage', 'roles.manage',
+               'workitems.manage')
+TASK_STATUSES = ('backlog', 'todo', 'doing', 'done')
 
 
 class AppError(Exception):
@@ -32,6 +35,25 @@ class Store:
             project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
             user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             role_id INTEGER NOT NULL REFERENCES roles(id), PRIMARY KEY(project_id, user_id));
+          CREATE TABLE IF NOT EXISTS requirements (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            created_by INTEGER NOT NULL REFERENCES users(id),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+          CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            requirement_id INTEGER REFERENCES requirements(id) ON DELETE SET NULL,
+            title TEXT NOT NULL,
+            assignee_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            due_date TEXT,
+            status TEXT NOT NULL DEFAULT 'backlog'
+              CHECK(status IN ('backlog','todo','doing','done')),
+            position INTEGER NOT NULL DEFAULT 0,
+            created_by INTEGER NOT NULL REFERENCES users(id),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
         ''')
 
     def close(self):
@@ -190,3 +212,137 @@ class Store:
                                   (project_id, user_id))
         if not cur.rowcount:
             raise AppError('成员关系不存在。', 404)
+    def _project_exists(self, project_id):
+        if not self._one('SELECT id FROM projects WHERE id=?', (project_id,)):
+            raise AppError('项目不存在。', 404)
+
+    @staticmethod
+    def _short_text(value, label, limit):
+        value = str(value or '').strip()
+        if not value or len(value) > limit:
+            raise AppError(f'{label}应为 1 至 {limit} 字。')
+        return value
+
+    @staticmethod
+    def _due_date(value):
+        if value in (None, ''):
+            return None
+        try:
+            return date.fromisoformat(str(value)).isoformat()
+        except ValueError as exc:
+            raise AppError('截止日期必须为 YYYY-MM-DD。') from exc
+    def list_requirements(self, project_id):
+        self._project_exists(project_id)
+        return [dict(row) for row in self.db.execute('''
+            SELECT id,project_id,title,description,created_by,created_at
+            FROM requirements WHERE project_id=? ORDER BY id''', (project_id,))]
+
+    def create_requirement(self, project_id, title, description, created_by):
+        self._project_exists(project_id)
+        title = self._short_text(title, '需求标题', 80)
+        description = str(description or '').strip()
+        if len(description) > 500:
+            raise AppError('需求说明不得超过 500 字。')
+        self.get_user(created_by)
+        with self.db:
+            cur = self.db.execute('''INSERT INTO requirements(project_id,title,description,created_by)
+                VALUES(?,?,?,?)''', (project_id, title, description, created_by))
+        return self.get_requirement(project_id, cur.lastrowid)
+
+    def get_requirement(self, project_id, requirement_id):
+        row = self._one('''SELECT id,project_id,title,description,created_by,created_at
+            FROM requirements WHERE project_id=? AND id=?''', (project_id, requirement_id))
+        if not row:
+            raise AppError('需求不存在或不属于当前项目。', 404)
+        return dict(row)
+
+    def list_tasks(self, project_id):
+        self._project_exists(project_id)
+        return [dict(row) for row in self.db.execute('''
+            SELECT t.id,t.project_id,t.requirement_id,t.title,t.assignee_user_id,
+                   u.email AS assignee_email,t.due_date,t.status,t.position,t.created_by,t.created_at
+            FROM tasks t LEFT JOIN users u ON u.id=t.assignee_user_id
+            WHERE t.project_id=?
+            ORDER BY CASE t.status WHEN 'backlog' THEN 0 WHEN 'todo' THEN 1
+                      WHEN 'doing' THEN 2 ELSE 3 END, t.position, t.id''', (project_id,))]
+
+    def _validate_assignee(self, project_id, user_id):
+        if user_id in (None, '', 0, '0'):
+            return None
+        try:
+            user_id = int(user_id)
+        except (TypeError, ValueError) as exc:
+            raise AppError('负责人编号不合法。') from exc
+        if not self._one('SELECT 1 FROM memberships WHERE project_id=? AND user_id=?',
+                         (project_id, user_id)):
+            raise AppError('负责人必须是当前项目成员。')
+        return user_id
+
+    def create_task(self, project_id, title, requirement_id, assignee_user_id,
+                    due_date, created_by, status='backlog'):
+        self._project_exists(project_id)
+        title = self._short_text(title, '任务标题', 100)
+        if status not in TASK_STATUSES:
+            raise AppError('任务状态不合法。')
+        if requirement_id in (None, '', 0, '0'):
+            requirement_id = None
+        else:
+            try:
+                requirement_id = int(requirement_id)
+            except (TypeError, ValueError) as exc:
+                raise AppError('需求编号不合法。') from exc
+            self.get_requirement(project_id, requirement_id)
+        assignee_user_id = self._validate_assignee(project_id, assignee_user_id)
+        due_date = self._due_date(due_date)
+        self.get_user(created_by)
+        position = self._one('''SELECT COALESCE(MAX(position),-1)+1 AS n FROM tasks
+            WHERE project_id=? AND status=?''', (project_id, status))['n']
+        with self.db:
+            cur = self.db.execute('''INSERT INTO tasks(
+                project_id,requirement_id,title,assignee_user_id,due_date,status,position,created_by)
+                VALUES(?,?,?,?,?,?,?,?)''',
+                (project_id, requirement_id, title, assignee_user_id, due_date,
+                 status, position, created_by))
+        return self.get_task(project_id, cur.lastrowid)
+
+    def get_task(self, project_id, task_id):
+        row = self._one('''
+            SELECT t.id,t.project_id,t.requirement_id,t.title,t.assignee_user_id,
+                   u.email AS assignee_email,t.due_date,t.status,t.position,t.created_by,t.created_at
+            FROM tasks t LEFT JOIN users u ON u.id=t.assignee_user_id
+            WHERE t.project_id=? AND t.id=?''', (project_id, task_id))
+        if not row:
+            raise AppError('任务不存在或不属于当前项目。', 404)
+        return dict(row)
+
+    def update_task(self, project_id, task_id, changes):
+        current = self.get_task(project_id, task_id)
+        allowed = {'title', 'requirement_id', 'assignee_user_id', 'due_date', 'status', 'position'}
+        if not isinstance(changes, dict) or not changes or any(key not in allowed for key in changes):
+            raise AppError('任务更新字段不合法。')
+        values = dict(current)
+        values.update(changes)
+        values['title'] = self._short_text(values['title'], '任务标题', 100)
+        if values['status'] not in TASK_STATUSES:
+            raise AppError('任务状态不合法。')
+        requirement_id = values['requirement_id']
+        if requirement_id in (None, '', 0, '0'):
+            requirement_id = None
+        else:
+            try:
+                requirement_id = int(requirement_id)
+            except (TypeError, ValueError) as exc:
+                raise AppError('需求编号不合法。') from exc
+            self.get_requirement(project_id, requirement_id)
+        assignee = self._validate_assignee(project_id, values['assignee_user_id'])
+        due_date = self._due_date(values['due_date'])
+        try:
+            position = max(0, int(values['position']))
+        except (TypeError, ValueError) as exc:
+            raise AppError('任务排序值不合法。') from exc
+        with self.db:
+            self.db.execute('''UPDATE tasks SET title=?,requirement_id=?,assignee_user_id=?,
+                due_date=?,status=?,position=? WHERE project_id=? AND id=?''',
+                (values['title'], requirement_id, assignee, due_date, values['status'],
+                 position, project_id, task_id))
+        return self.get_task(project_id, task_id)

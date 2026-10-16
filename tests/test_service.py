@@ -44,5 +44,45 @@ class StoreTests(unittest.TestCase):
         role = self.store.create_role('成员')
         with self.assertRaises(AppError): self.store.set_permissions(role['id'], ['unknown.permission'])
 
+    def test_requirement_task_and_board_flow(self):
+        manager = self.store.create_user('manager@example.test', 'ManagerPass123')
+        role = self.store.create_role('项目经理')
+        self.store.set_permissions(role['id'], ['project.view', 'workitems.manage'])
+        project = self.store.create_project('蜂鸟')
+        self.store.add_member(project['id'], manager['id'], role['id'])
+        requirement = self.store.create_requirement(project['id'], '看板管理', '支持任务推进', manager['id'])
+        task = self.store.create_task(project['id'], '实现任务卡片', requirement['id'],
+                                      manager['id'], '2026-10-20', manager['id'], 'todo')
+        self.assertEqual(task['assignee_email'], 'manager@example.test')
+        moved = self.store.update_task(project['id'], task['id'], {'status': 'doing'})
+        self.assertEqual(moved['status'], 'doing')
+        self.assertEqual(self.store.list_requirements(project['id'])[0]['title'], '看板管理')
+        self.assertEqual(self.store.list_tasks(project['id'])[0]['title'], '实现任务卡片')
+
+    def test_task_rejects_cross_project_requirement_and_outsider(self):
+        member = self.store.create_user('member@example.test', 'MemberPass123')
+        outsider = self.store.create_user('outsider@example.test', 'OutsiderPass123')
+        role = self.store.create_role('成员')
+        first = self.store.create_project('项目一')
+        second = self.store.create_project('项目二')
+        self.store.add_member(first['id'], member['id'], role['id'])
+        requirement = self.store.create_requirement(first['id'], '需求一', '', self.admin['id'])
+        with self.assertRaises(AppError) as cross_project:
+            self.store.create_task(second['id'], '错误关联', requirement['id'], None,
+                                   None, self.admin['id'])
+        self.assertEqual(cross_project.exception.status, 404)
+        with self.assertRaises(AppError):
+            self.store.create_task(first['id'], '错误负责人', None, outsider['id'], None, self.admin['id'])
+
+    def test_task_validates_dates_status_and_update_fields(self):
+        project = self.store.create_project('蜂鸟')
+        with self.assertRaises(AppError):
+            self.store.create_task(project['id'], '任务', None, None, '20-10-2026', self.admin['id'])
+        with self.assertRaises(AppError):
+            self.store.create_task(project['id'], '任务', None, None, None, self.admin['id'], 'closed')
+        task = self.store.create_task(project['id'], '任务', None, None, None, self.admin['id'])
+        with self.assertRaises(AppError):
+            self.store.update_task(project['id'], task['id'], {'unknown': True})
+
 
 if __name__ == '__main__': unittest.main()

@@ -1,4 +1,4 @@
-name: Sprint 1 tests
+name: Sprint 2 cumulative regression tests
 
 on:
   push:

@@ -139,6 +139,39 @@ class Handler(BaseHTTPRequestHandler):
             if match and method == 'GET':
                 self.store.require_permission(user, int(match.group(1)), 'members.manage')
                 return self.reply({'allowed': True, 'permission': 'members.manage'})
+            match = re.fullmatch(r'/api/projects/(\d+)/workitems/manage-check', path)
+            if match and method == 'GET':
+                self.store.require_permission(user, int(match.group(1)), 'workitems.manage')
+                return self.reply({'allowed': True, 'permission': 'workitems.manage'})
+            match = re.fullmatch(r'/api/projects/(\d+)/requirements', path)
+            if match:
+                project_id = int(match.group(1))
+                if method == 'GET':
+                    self.store.require_permission(user, project_id, 'project.view')
+                    return self.reply(self.store.list_requirements(project_id))
+                if method == 'POST':
+                    self.store.require_permission(user, project_id, 'workitems.manage')
+                    data = self.payload()
+                    return self.reply(self.store.create_requirement(
+                        project_id, data.get('title', ''), data.get('description', ''), user['id']), 201)
+            match = re.fullmatch(r'/api/projects/(\d+)/tasks', path)
+            if match:
+                project_id = int(match.group(1))
+                if method == 'GET':
+                    self.store.require_permission(user, project_id, 'project.view')
+                    return self.reply(self.store.list_tasks(project_id))
+                if method == 'POST':
+                    self.store.require_permission(user, project_id, 'workitems.manage')
+                    data = self.payload()
+                    return self.reply(self.store.create_task(
+                        project_id, data.get('title', ''), data.get('requirement_id'),
+                        data.get('assignee_user_id'), data.get('due_date'), user['id'],
+                        data.get('status', 'backlog')), 201)
+            match = re.fullmatch(r'/api/projects/(\d+)/tasks/(\d+)', path)
+            if match and method == 'PUT':
+                project_id, task_id = map(int, match.groups())
+                self.store.require_permission(user, project_id, 'workitems.manage')
+                return self.reply(self.store.update_task(project_id, task_id, self.payload()))
             match = re.fullmatch(r'/api/projects/(\d+)/members', path)
             if match:
                 project_id = int(match.group(1))

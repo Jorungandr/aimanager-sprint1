@@ -76,5 +76,44 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.req(self.member, '/api/roles', 'POST', {'name': '观察者'})[0], 201)
         self.assertEqual(self.req(self.member, '/api/projects', 'POST', {'name': '新项目'})[0], 201)
 
+    def test_sprint2_work_items_and_sprint1_regression(self):
+        self.assertEqual(self.req(self.admin, '/api/setup', 'POST',
+                                  {'email': 'admin@example.test', 'password': 'AdminPass123'})[0], 201)
+        _, manager = self.req(self.admin, '/api/users', 'POST',
+                              {'email': 'manager@example.test', 'password': 'ManagerPass123'})
+        _, viewer = self.req(self.admin, '/api/users', 'POST',
+                             {'email': 'viewer@example.test', 'password': 'ViewerPass123'})
+        _, manager_role = self.req(self.admin, '/api/roles', 'POST', {'name': '项目经理'})
+        self.req(self.admin, f"/api/roles/{manager_role['id']}/permissions", 'PUT',
+                 {'permissions': ['project.view', 'members.manage', 'workitems.manage']})
+        _, viewer_role = self.req(self.admin, '/api/roles', 'POST', {'name': '观察者'})
+        self.req(self.admin, f"/api/roles/{viewer_role['id']}/permissions", 'PUT',
+                 {'permissions': ['project.view']})
+        _, project = self.req(self.admin, '/api/projects', 'POST', {'name': '蜂鸟'})
+        self.req(self.admin, f"/api/projects/{project['id']}/members", 'POST',
+                 {'user_id': manager['id'], 'role_id': manager_role['id']})
+        self.req(self.admin, f"/api/projects/{project['id']}/members", 'POST',
+                 {'user_id': viewer['id'], 'role_id': viewer_role['id']})
+        self.req(self.member, '/api/login', 'POST',
+                 {'email': 'manager@example.test', 'password': 'ManagerPass123'})
+        status, requirement = self.req(self.member, f"/api/projects/{project['id']}/requirements", 'POST',
+                                       {'title': '看板管理', 'description': '推进任务状态'})
+        self.assertEqual(status, 201)
+        status, task = self.req(self.member, f"/api/projects/{project['id']}/tasks", 'POST', {
+            'title': '实现任务卡片', 'requirement_id': requirement['id'],
+            'assignee_user_id': viewer['id'], 'due_date': '2026-10-20', 'status': 'todo'})
+        self.assertEqual(status, 201)
+        status, moved = self.req(self.member,
+                                 f"/api/projects/{project['id']}/tasks/{task['id']}", 'PUT',
+                                 {'status': 'doing'})
+        self.assertEqual((status, moved['status']), (200, 'doing'))
+        self.assertEqual(self.req(self.member, f"/api/projects/{project['id']}/members")[0], 200)
+        viewer_client = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.req(viewer_client, '/api/login', 'POST',
+                 {'email': 'viewer@example.test', 'password': 'ViewerPass123'})
+        self.assertEqual(self.req(viewer_client, f"/api/projects/{project['id']}/tasks")[0], 200)
+        self.assertEqual(self.req(viewer_client, f"/api/projects/{project['id']}/tasks", 'POST',
+                                  {'title': '越权任务'})[0], 403)
+
 
 if __name__ == '__main__': unittest.main()
