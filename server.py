@@ -236,6 +236,7 @@ class Handler(BaseHTTPRequestHandler):
                     data = self.payload()
                     return self.reply(self.store.create_requirement(
                         project_id, data.get('title', ''), data.get('description', ''), user['id']), 201)
+                raise AppError('不支持的请求方法。', 405)
             match = re.fullmatch(r'/api/projects/(\d+)/requirements/(\d+)', path)
             if match:
                 project_id, requirement_id = map(int, match.groups())
@@ -247,8 +248,11 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(self.store.update_requirement(project_id, requirement_id, self.payload()))
                 if method == 'DELETE':
                     raise AppError('需求不支持永久删除，请使用归档操作。', 405)
+                raise AppError('不支持的请求方法。', 405)
             match = re.fullmatch(r'/api/projects/(\d+)/requirements/(\d+)/archive', path)
-            if match and method == 'POST':
+            if match:
+                if method != 'POST':
+                    raise AppError('不支持的请求方法。', 405)
                 project_id, requirement_id = map(int, match.groups())
                 self.store.require_permission(user, project_id, 'workitems.manage')
                 data = self.payload()
@@ -257,7 +261,9 @@ class Handler(BaseHTTPRequestHandler):
                     raise AppError('归档需求须携带版本号，请刷新后重试。', 428)
                 return self.reply(self.store.archive_requirement(project_id, requirement_id, version))
             match = re.fullmatch(r'/api/projects/(\d+)/requirements/(\d+)/restore', path)
-            if match and method == 'POST':
+            if match:
+                if method != 'POST':
+                    raise AppError('不支持的请求方法。', 405)
                 project_id, requirement_id = map(int, match.groups())
                 self.store.require_permission(user, project_id, 'workitems.manage')
                 data = self.payload()
@@ -278,8 +284,11 @@ class Handler(BaseHTTPRequestHandler):
                         project_id, data.get('title', ''), data.get('requirement_id'),
                         data.get('assignee_user_id'), data.get('due_date'), user['id'],
                         data.get('status', 'backlog')), 201)
+                raise AppError('不支持的请求方法。', 405)
             match = re.fullmatch(r'/api/projects/(\d+)/tasks/query', path)
-            if match and method == 'GET':
+            if match:
+                if method != 'GET':
+                    raise AppError('不支持的请求方法。', 405)
                 project_id = int(match.group(1))
                 self.store.require_permission(user, project_id, 'project.view')
                 params = parse_qs(urlparse(self.path).query, keep_blank_values=True)
