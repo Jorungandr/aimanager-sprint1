@@ -1,4 +1,4 @@
-"""Pending HTTP integration contract, separate from the green regression suite.
+"""HTTP integration contract, also loaded by test_business_api_contract.py.
 
 Run: python tests/contracts/business_api_contract.py -v
 Missing routes must FAIL, not skip or pass as expected failures.
@@ -137,6 +137,8 @@ class BusinessApiContractTests(unittest.TestCase):
                 self.expect(self.admin, self.requirement_path, status, 'PUT', payload)
                 self.assertEqual(self.snapshot(), before)
         self.assertEqual(self.expect(self.admin, self.requirement_path, 200), updated)
+        self.expect(self.admin, self.requirement_path, 405, 'DELETE')
+        self.assertEqual(self.snapshot(), before)
 
     def test_archive_restore_preserves_task_links_and_checks_versions(self):
         before = self.snapshot()

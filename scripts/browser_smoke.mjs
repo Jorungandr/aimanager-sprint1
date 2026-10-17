@@ -71,10 +71,33 @@ try {
     await page.getByRole('button', { name: '保存修改', exact: true }).click();
     await page.locator('#taskDialogError').filter({ hasText: '任务已被其他操作修改' }).waitFor();
     await page.getByRole('button', { name: '关闭', exact: true }).click();
+    await page.getByRole('searchbox', { name: '搜索任务' }).fill('');
+    await page.getByRole('button', { name: '刷新数据', exact: true }).click();
+    await page.getByText('新建需求或任务', { exact: true }).click();
+    const requirementForm = page.locator('.workitem-forms form').first();
+    await requirementForm.locator('[name=title]').fill('Lifecycle requirement');
+    await requirementForm.getByRole('button', { name: '保存需求', exact: true }).click();
+    await page.getByText('需求列表 · 1 条', { exact: true }).click();
+    const requirementRow = page.locator('.requirements li');
+    await requirementRow.getByRole('button', { name: '编辑', exact: true }).click();
+    await page.locator('#editRequirementForm [name=title]').fill('Updated lifecycle');
+    await page.locator('#editRequirementForm [type=submit]').click();
+    await page.locator('#requirementDialog').waitFor({ state: 'hidden' });
+    await page.getByText('需求列表 · 1 条', { exact: true }).click();
+    await requirementRow.getByText('Updated lifecycle', { exact: true }).waitFor();
+    page.once('dialog', dialog => dialog.accept());
+    await requirementRow.getByRole('button', { name: '归档', exact: true }).click();
+    await page.getByText('需求列表 · 1 条', { exact: true }).click();
+    await requirementRow.getByRole('button', { name: '恢复', exact: true }).waitFor();
+    await page.getByText('新建需求或任务', { exact: true }).click();
+    assert.equal(await page.locator('.workitem-forms select[name=requirement_id] option').count(), 1);
+    await requirementRow.getByRole('button', { name: '恢复', exact: true }).click();
+    await page.getByText('新建需求或任务', { exact: true }).click();
+    await page.locator('.workitem-forms select[name=requirement_id] option').filter({ hasText: 'Updated lifecycle' }).waitFor({ state: 'attached' });
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
     assert.deepEqual(errors, []);
-    console.log('Browser smoke passed: creation, edit, state, filters, stale conflict, mobile layout');
+    console.log('Browser smoke passed: creation, edit, archive, restore, state, filters, stale conflict, mobile layout');
 } finally {
     if (browser) {
         await browser.close();

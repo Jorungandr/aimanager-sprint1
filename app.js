@@ -25,6 +25,7 @@ async function api(path, options = {}) {
       $('logout').hidden = true;
       $('loginPanel').hidden = false;
       $('taskDialog').close();
+      $('requirementDialog').close();
     }
     const error = new Error(`${response.status} ${data.error || '请求失败'}`);
     error.status = response.status;
@@ -34,11 +35,11 @@ async function api(path, options = {}) {
 }
 function say(message, error = false) { $('notice').textContent = message; $('notice').className = error ? 'error' : 'ok'; }
 function formData(form) { return Object.fromEntries(new FormData(form).entries()); }
-async function submit(form, path, after) {
+async function submit(form, path, after, method = 'POST') {
   const buttons = [...form.querySelectorAll('button')];
   buttons.forEach(button => { button.disabled = true; });
   try {
-    const created = await api(path, { method: 'POST', body: JSON.stringify(formData(form)) });
+    const created = await api(path, { method, body: JSON.stringify(formData(form)) });
     if (path === '/api/projects') {
       activeProject = String(created.id);
       activeView = 'collaboration';
@@ -125,9 +126,21 @@ function renderMatrix() {
       const td = document.createElement('td'), check = document.createElement('input'); check.type = 'checkbox'; check.checked = role.permissions.includes(key);
       check.setAttribute('aria-label', `${role.name} ${permissionLabels[key]}`); checks[key] = check; td.append(check); tr.append(td);
     }
-    const action = document.createElement('td'), button = document.createElement('button'); button.textContent = '保存权限';
-    button.addEventListener('click', async () => { try { await api(`/api/roles/${role.id}/permissions`, { method: 'PUT', body: JSON.stringify({ permissions: Object.keys(checks).filter(k => checks[k].checked) }) }); say('权限已保存'); await refresh(); } catch (e) { say(e.message, true); } });
-    action.append(button); tr.append(action); body.append(tr);
+    const action = document.createElement('td');
+    const button = document.createElement('button');
+    button.textContent = '保存权限';
+    button.addEventListener('click', async () => {
+      try {
+        await api(`/api/roles/${role.id}/permissions`, { method: 'PUT', body: JSON.stringify({ permissions: Object.keys(checks).filter(k => checks[k].checked) }) });
+        say('权限已保存');
+        await refresh();
+      } catch (e) {
+        say(e.message, true);
+      }
+    });
+    action.append(button);
+    tr.append(action);
+    body.append(tr);
   }
 }
 async function renderProjects() {
@@ -204,7 +217,65 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
   card.append(progress);
   const requirementList = document.createElement('ul'); requirementList.className = 'requirements';
   if (!requirements.length) { const empty = document.createElement('li'); empty.textContent = '暂无需求条目'; requirementList.append(empty); }
-  requirements.forEach(item => { const li = document.createElement('li'); const strong = document.createElement('strong'); strong.textContent = item.title; li.append(strong); if (item.description) li.append(document.createTextNode(` — ${item.description}`)); requirementList.append(li); });
+  requirements.forEach(item => {
+    const li = document.createElement('li');
+    if (item.archived) li.className = 'archived';
+    const strong = document.createElement('strong');
+    strong.textContent = item.title;
+    li.append(strong);
+    if (item.archived) {
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = '已归档';
+      li.append(badge);
+    }
+    if (item.description) li.append(document.createTextNode(` — ${item.description}`));
+    if (canManage) {
+      const actions = document.createElement('div');
+      actions.className = 'requirement-actions';
+      if (item.archived) {
+        // 已归档的需求显示恢复按钮
+        const restore = document.createElement('button');
+        restore.type = 'button';
+        restore.className = 'secondary';
+        restore.textContent = '恢复';
+        restore.addEventListener('click', async () => {
+          try {
+            await api(`/api/projects/${project.id}/requirements/${item.id}/restore`, { method: 'POST', body: JSON.stringify({ version: item.version }) });
+            say('需求已恢复');
+            await refresh();
+          } catch (error) {
+            say(error.message, true);
+          }
+        });
+        actions.append(restore);
+      } else {
+        // 未归档的需求显示编辑和归档按钮
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'secondary';
+        edit.textContent = '编辑';
+        edit.addEventListener('click', () => openRequirementEditor(project, item));
+        const archive = document.createElement('button');
+        archive.type = 'button';
+        archive.className = 'danger';
+        archive.textContent = '归档';
+        archive.addEventListener('click', async () => {
+          if (!confirm(`归档需求"${item.title}"？历史任务将保留关联。`)) return;
+          try {
+            await api(`/api/projects/${project.id}/requirements/${item.id}/archive`, { method: 'POST', body: JSON.stringify({ version: item.version }) });
+            say('需求已归档');
+            await refresh();
+          } catch (error) {
+            say(error.message, true);
+          }
+        });
+        actions.append(edit, archive);
+      }
+      li.append(actions);
+    }
+    requirementList.append(li);
+  });
   const requirementDetails = document.createElement('details');
   const requirementSummary = document.createElement('summary');
   requirementSummary.textContent = `需求列表 · ${requirements.length} 条`;
@@ -216,7 +287,7 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
     requirementForm.addEventListener('submit', event => { event.preventDefault(); submit(requirementForm, `/api/projects/${project.id}/requirements`, refresh); });
     const taskForm = document.createElement('form'); const taskTitle = document.createElement('h5'); taskTitle.textContent = '新增任务'; taskForm.append(taskTitle);
     const titleLabel = document.createElement('label'); titleLabel.textContent = '标题'; const titleInput = document.createElement('input'); titleInput.name = 'title'; titleInput.maxLength = 100; titleInput.required = true; titleLabel.append(titleInput); taskForm.append(titleLabel);
-    const requirementLabel = document.createElement('label'); requirementLabel.textContent = '关联需求'; const requirementSelect = document.createElement('select'); requirementSelect.name = 'requirement_id'; requirementSelect.append(option('', '不关联')); requirements.forEach(item => requirementSelect.append(option(item.id, item.title))); requirementLabel.append(requirementSelect); taskForm.append(requirementLabel);
+    const requirementLabel = document.createElement('label'); requirementLabel.textContent = '关联需求'; const requirementSelect = document.createElement('select'); requirementSelect.name = 'requirement_id'; requirementSelect.append(option('', '不关联')); requirements.filter(item => !item.archived).forEach(item => requirementSelect.append(option(item.id, item.title))); requirementLabel.append(requirementSelect); taskForm.append(requirementLabel);
     const assigneeLabel = document.createElement('label'); assigneeLabel.textContent = '负责人'; const assigneeSelect = document.createElement('select'); assigneeSelect.name = 'assignee_user_id'; assigneeSelect.append(option('', '暂不指派')); members.forEach(item => assigneeSelect.append(option(item.user_id, item.email))); assigneeLabel.append(assigneeSelect); taskForm.append(assigneeLabel);
     const dueLabel = document.createElement('label'); dueLabel.textContent = '截止日'; const dueInput = document.createElement('input'); dueInput.type = 'date'; dueInput.name = 'due_date'; dueLabel.append(dueInput); taskForm.append(dueLabel);
     const status = document.createElement('input'); status.type = 'hidden'; status.name = 'status'; status.value = 'todo'; taskForm.append(status);
@@ -334,11 +405,39 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
   draw();
   card.append(board);
 }
+let editingRequirement = null;
+function openRequirementEditor(project, requirement) {
+  editingRequirement = { project, requirement };
+  const form = $('editRequirementForm');
+  form.elements.title.value = requirement.title;
+  form.elements.description.value = requirement.description || '';
+  $('requirementDialogError').textContent = '';
+  $('requirementDialog').showModal();
+}
+$('closeRequirementDialog').addEventListener('click', () => $('requirementDialog').close());
+$('editRequirementForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!editingRequirement) return;
+  const button = event.currentTarget.querySelector('[type="submit"]');
+  button.disabled = true;
+  try {
+    const data = formData(event.currentTarget);
+    data.version = editingRequirement.requirement.version;
+    await api(`/api/projects/${editingRequirement.project.id}/requirements/${editingRequirement.requirement.id}`, { method: 'PUT', body: JSON.stringify(data) });
+    $('requirementDialog').close();
+    say('需求修改已保存');
+    await renderProjects();
+  } catch (error) {
+    $('requirementDialogError').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
 function openTaskEditor(project, task, members, requirements) {
   editingTask = { project, task };
   const form = $('editTaskForm');
   form.elements.title.value = task.title;
-  form.elements.requirement_id.replaceChildren(option('', '不关联'), ...requirements.map(item => option(item.id, item.title)));
+  form.elements.requirement_id.replaceChildren(option('', '不关联'), ...requirements.filter(item => !item.archived || item.id === task.requirement_id).map(item => option(item.id, item.title)));
   form.elements.requirement_id.value = task.requirement_id || '';
   form.elements.assignee_user_id.replaceChildren(option('', '暂不指派'), ...members.map(member => option(member.user_id, member.email)));
   form.elements.assignee_user_id.value = task.assignee_user_id || '';

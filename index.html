@@ -33,6 +33,17 @@
     <label>截止日<input name="due_date" type="date"></label>
     <label>状态<select name="status"></select></label>
     <p id="taskDialogError" class="error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="submit">保存修改</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="requirementDialog" aria-labelledby="requirementDialogTitle">
+  <form id="editRequirementForm">
+    <div class="section-heading"><h2 id="requirementDialogTitle">编辑需求</h2><button type="button" id="closeRequirementDialog" class="secondary">关闭</button></div>
+    <label>需求标题<input name="title" maxlength="80" required></label>
+    <label>需求说明<input name="description" maxlength="500"></label>
+    <p id="requirementDialogError" class="error" role="alert"></p>
     <button type="submit">保存修改</button>
   </form>
 </dialog>

@@ -9,7 +9,7 @@ import re
 import secrets
 import threading
 import time
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from service import AppError, Store
 
@@ -236,6 +236,35 @@ class Handler(BaseHTTPRequestHandler):
                     data = self.payload()
                     return self.reply(self.store.create_requirement(
                         project_id, data.get('title', ''), data.get('description', ''), user['id']), 201)
+            match = re.fullmatch(r'/api/projects/(\d+)/requirements/(\d+)', path)
+            if match:
+                project_id, requirement_id = map(int, match.groups())
+                self.store.require_permission(user, project_id,
+                                              'project.view' if method == 'GET' else 'workitems.manage')
+                if method == 'GET':
+                    return self.reply(self.store.get_requirement(project_id, requirement_id))
+                if method == 'PUT':
+                    return self.reply(self.store.update_requirement(project_id, requirement_id, self.payload()))
+                if method == 'DELETE':
+                    raise AppError('需求不支持永久删除，请使用归档操作。', 405)
+            match = re.fullmatch(r'/api/projects/(\d+)/requirements/(\d+)/archive', path)
+            if match and method == 'POST':
+                project_id, requirement_id = map(int, match.groups())
+                self.store.require_permission(user, project_id, 'workitems.manage')
+                data = self.payload()
+                version = data.get('version')
+                if version is None:
+                    raise AppError('归档需求须携带版本号，请刷新后重试。', 428)
+                return self.reply(self.store.archive_requirement(project_id, requirement_id, version))
+            match = re.fullmatch(r'/api/projects/(\d+)/requirements/(\d+)/restore', path)
+            if match and method == 'POST':
+                project_id, requirement_id = map(int, match.groups())
+                self.store.require_permission(user, project_id, 'workitems.manage')
+                data = self.payload()
+                version = data.get('version')
+                if version is None:
+                    raise AppError('恢复需求须携带版本号，请刷新后重试。', 428)
+                return self.reply(self.store.restore_requirement(project_id, requirement_id, version))
             match = re.fullmatch(r'/api/projects/(\d+)/tasks', path)
             if match:
                 project_id = int(match.group(1))
@@ -249,11 +278,29 @@ class Handler(BaseHTTPRequestHandler):
                         project_id, data.get('title', ''), data.get('requirement_id'),
                         data.get('assignee_user_id'), data.get('due_date'), user['id'],
                         data.get('status', 'backlog')), 201)
+            match = re.fullmatch(r'/api/projects/(\d+)/tasks/query', path)
+            if match and method == 'GET':
+                project_id = int(match.group(1))
+                self.store.require_permission(user, project_id, 'project.view')
+                params = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+                allowed = {'page', 'page_size', 'status', 'assignee_user_id',
+                           'unassigned', 'requirement_id', 'keyword'}
+                if any(key not in allowed or len(values) != 1 for key, values in params.items()):
+                    raise AppError('查询参数未知或重复。')
+                filters = {key: values[0] for key, values in params.items()}
+                if 'unassigned' in filters:
+                    if filters['unassigned'] not in ('true', 'false'):
+                        raise AppError('unassigned 必须为 true 或 false。')
+                    filters['unassigned'] = filters['unassigned'] == 'true'
+                return self.reply(self.store.query_tasks(project_id, **filters))
             match = re.fullmatch(r'/api/projects/(\d+)/tasks/(\d+)', path)
-            if match and method == 'PUT':
+            if match:
                 project_id, task_id = map(int, match.groups())
                 self.store.require_permission(user, project_id, 'workitems.manage')
-                return self.reply(self.store.update_task(project_id, task_id, self.payload()))
+                if method == 'PUT':
+                    return self.reply(self.store.update_task(project_id, task_id, self.payload()))
+                if method == 'DELETE':
+                    raise AppError('当前版本不支持永久删除任务。', 405)
             match = re.fullmatch(r'/api/projects/(\d+)/members', path)
             if match:
                 project_id = int(match.group(1))
