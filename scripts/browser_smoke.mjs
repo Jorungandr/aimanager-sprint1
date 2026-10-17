@@ -70,7 +70,10 @@ try {
     assert.equal(response.status(), 200);
     await page.getByRole('button', { name: '保存修改', exact: true }).click();
     await page.locator('#taskDialogError').filter({ hasText: '任务已被其他操作修改' }).waitFor();
-    await page.getByRole('button', { name: '关闭', exact: true }).click();
+    assert.equal(await page.locator('#editTaskForm [type=submit]').isDisabled(), true);
+    assert.equal(await page.locator('#editTaskForm [name=title]').inputValue(), 'Edited task');
+    await page.locator('#editTaskForm [data-dialog-refresh]').click();
+    await page.locator('#taskDialog').waitFor({ state: 'hidden' });
     await page.getByRole('searchbox', { name: '搜索任务' }).fill('');
     await page.getByRole('button', { name: '刷新数据', exact: true }).click();
     await page.getByText('新建需求或任务', { exact: true }).click();
@@ -96,6 +99,15 @@ try {
     await page.locator('.workitem-forms select[name=requirement_id] option').filter({ hasText: 'Updated lifecycle' }).waitFor({ state: 'attached' });
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+    await page.locator('.task-card').first().getByRole('button', { name: '编辑', exact: true }).click();
+    assert.equal(await page.locator('#editTaskForm [type=submit]').isEnabled(), true);
+    const loggedOut = await api.post(`${url}/api/logout`, { data: {} });
+    assert.equal(loggedOut.status(), 200);
+    await page.locator('#editTaskForm [type=submit]').click();
+    await page.locator('#loginPanel').waitFor({ state: 'visible' });
+    await page.locator('#taskDialog').waitFor({ state: 'hidden' });
+    assert.equal(await page.locator('#workspace').isHidden(), true);
+    assert.match(await page.locator('#notice').textContent(), /登录.*过期/);
     assert.deepEqual(errors, []);
     console.log('Browser smoke passed: creation, edit, archive, restore, state, filters, stale conflict, mobile layout');
 } finally {

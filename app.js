@@ -41,6 +41,7 @@ function closeDialogs() {
 /* 登录过期统一收口：清空编辑上下文、关闭弹窗、回到登录页并说明原因。 */
 function enterLoggedOut() {
   current = null;
+  projectRequest += 1;
   closeDialogs();
   filters.clear();
   activeProject = '';
@@ -81,6 +82,15 @@ function say(message, error = false) {
 }
 function formData(form) { return Object.fromEntries(new FormData(form).entries()); }
 async function submit(form, path, after, method = 'POST') {
+  let problem = form.querySelector('[data-form-error]');
+  if (!problem) {
+    problem = document.createElement('p');
+    problem.className = 'error';
+    problem.dataset.formError = '';
+    problem.setAttribute('role', 'alert');
+    form.append(problem);
+  }
+  problem.textContent = '';
   const buttons = [...form.querySelectorAll('button')];
   buttons.forEach(button => { button.disabled = true; });
   try {
@@ -93,6 +103,7 @@ async function submit(form, path, after, method = 'POST') {
     say('保存成功，数据已更新');
     await after();
   } catch (error) {
+    problem.textContent = error.message;
     say(error.message, true);
   } finally {
     buttons.forEach(button => { button.disabled = false; });
@@ -570,7 +581,9 @@ document.querySelectorAll('[data-dialog-refresh]').forEach(button => {
     try {
       await refresh();
       button.closest('dialog').close();
-      say('已获取最新数据，请重新选择要编辑的条目');
+      if (current) {
+        say('已获取最新数据，请重新选择要编辑的条目');
+      }
     } catch (error) {
       say(error.message, true);
     } finally {
@@ -652,7 +665,9 @@ $('refreshWorkspace').addEventListener('click', async () => {
   $('refreshWorkspace').disabled = true;
   try {
     await refresh();
-    say('已获取最新数据');
+    if (current) {
+      say('已获取最新数据');
+    }
   } catch (error) {
     say(error.message, true);
   } finally {
