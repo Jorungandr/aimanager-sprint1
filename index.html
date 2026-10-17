@@ -1,50 +1,228 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>爱管理 · Sprint 2</title><link rel="stylesheet" href="styles.css"></head>
-<body><div class="shell">
-  <header class="topbar"><div><p class="eyebrow">爱管理 · Sprint 2 累积增量</p><h1>权限底座与项目协作</h1><p class="sub">创建需求和任务，指派负责人及截止日，并在看板中推进状态</p></div><button id="logout" class="secondary" hidden>退出登录</button></header>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#1f6a83">
+  <meta name="description" content="爱管理：面向 5—15 人小团队的轻量项目协作原型，覆盖需求、任务、负责人、截止日与看板流转。">
+  <title>爱管理 · Sprint 2</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip-link" href="#workspace">跳到主内容</a>
+<noscript><p class="callout">本原型依赖 JavaScript 完成页面渲染与接口请求，请在浏览器中启用后重试。</p></noscript>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand">
+      <p class="eyebrow">爱管理 · Sprint 2 累积增量</p>
+      <h1>权限底座与项目协作</h1>
+      <p class="sub">创建需求和任务，指派负责人及截止日，并在看板中推进状态。</p>
+    </div>
+    <div class="topbar-actions">
+      <button id="logout" class="secondary" type="button" hidden>退出登录</button>
+    </div>
+  </header>
+
   <p id="notice" role="status" aria-live="polite"></p>
-  <section id="setupPanel" class="panel" hidden><h2>初始化管理员</h2><p>首次使用时创建平台管理员。请使用演示账号，不要输入真实凭证。</p><form id="setupForm"><label>邮箱<input name="email" type="email" required></label><label>密码<input name="password" type="password" minlength="8" required></label><button>创建并登录</button></form></section>
-  <section id="loginPanel" class="panel" hidden><h2>登录工作空间</h2><form id="loginForm"><label>邮箱<input name="email" type="email" required></label><label>密码<input name="password" type="password" required></label><button>登录</button></form></section>
+
+  <section id="setupPanel" class="panel auth-panel" hidden>
+    <h2>初始化管理员</h2>
+    <p class="panel-lead">首次使用时创建平台管理员账号。本页面仅用于课程演示，请使用虚构的邮箱与口令，不要输入真实凭证。</p>
+    <form id="setupForm">
+      <label>邮箱
+        <input name="email" type="email" required autocomplete="username" inputmode="email" placeholder="demo@example.com" aria-describedby="setupEmailHint">
+      </label>
+      <p class="hint" id="setupEmailHint">作为登录账号使用，创建后不能在本页面修改。</p>
+      <label>密码
+        <input name="password" type="password" minlength="8" required autocomplete="new-password" placeholder="至少 8 位字符">
+      </label>
+      <p class="hint">至少 8 位；本原型不提供密码找回，请自行记录演示口令。</p>
+      <button type="submit">创建并登录</button>
+    </form>
+  </section>
+
+  <section id="loginPanel" class="panel auth-panel" hidden>
+    <h2>登录工作空间</h2>
+    <p class="panel-lead">使用团队分配的演示账号登录。连续 1 分钟内失败 5 次会暂时返回 429，稍后重试即可。</p>
+    <form id="loginForm">
+      <label>邮箱
+        <input name="email" type="email" required autocomplete="username" inputmode="email" placeholder="demo@example.com">
+      </label>
+      <label>密码
+        <input name="password" type="password" required autocomplete="current-password" placeholder="演示口令">
+      </label>
+      <p class="hint">登录会话保存在服务器进程内，约 2 小时后或服务重启后需要重新登录。</p>
+      <button type="submit">登录</button>
+    </form>
+  </section>
+
   <main id="workspace" hidden>
     <nav class="workspace-nav" aria-label="工作区导航">
-      <button type="button" data-view="collaboration" aria-pressed="true">项目协作</button>
-      <button type="button" data-view="administration" aria-pressed="false">管理配置</button>
-      <button type="button" data-view="verification" aria-pressed="false">权限验证</button>
+      <div class="workspace-tabs" role="group" aria-label="切换视图">
+        <button type="button" data-view="collaboration" aria-pressed="true">项目协作</button>
+        <button type="button" data-view="administration" aria-pressed="false">管理配置</button>
+        <button type="button" data-view="verification" aria-pressed="false">权限验证</button>
+      </div>
       <button type="button" id="refreshWorkspace" class="secondary">刷新数据</button>
     </nav>
-    <section class="summary"><div><span>当前账号</span><strong id="currentUser">—</strong></div><div><span>项目</span><strong id="projectCount">0</strong></div><div><span>角色</span><strong id="roleCount">0</strong></div></section>
-    <section id="adminPanel" class="panel" hidden><h2>管理配置</h2>
-      <div class="form-grid"><form id="roleForm" hidden><h3>创建角色</h3><label>角色名称<input name="name" maxlength="30" required placeholder="如 项目经理"></label><button>创建角色</button></form>
-      <form id="userForm" hidden><h3>创建演示账号</h3><label>邮箱<input name="email" type="email" required></label><label>密码<input name="password" type="password" minlength="8" required></label><button>创建账号</button></form></div>
-      <div id="matrixPanel" hidden><h3>角色—权限矩阵</h3><div class="table-wrap"><table id="matrix"><thead><tr><th>角色</th><th>查看项目</th><th>管理成员</th><th>管理项目</th><th>管理角色</th><th>操作</th></tr></thead><tbody></tbody></table></div></div>
-      <form id="projectForm" hidden><h3>创建项目</h3><label>项目名称<input name="name" maxlength="60" required placeholder="如 蜂鸟演示项目"></label><button>创建项目</button></form>
+
+    <section class="summary" aria-label="工作区概览">
+      <div><span>当前账号</span><strong id="currentUser">—</strong></div>
+      <div><span>可访问项目</span><strong id="projectCount">0</strong></div>
+      <div><span>可用角色</span><strong id="roleCount">0</strong></div>
     </section>
-    <section class="panel" id="collaborationPanel"><div class="section-heading"><div><p class="eyebrow">PROJECT WORKSPACE</p><h2>项目工作区</h2></div><label class="project-picker">当前项目<select id="projectPicker"><option value="">暂无项目</option></select></label></div><div id="projects"></div></section>
-    <section id="checkPanel" class="panel"><h2>权限验证</h2><p>选择项目后，向服务器发起“查看成员”和“管理成员”请求，直接观察访问控制结果。</p><div class="inline"><select id="checkProject" aria-label="选择项目"></select><button id="checkView" type="button" class="secondary">检查项目访问</button><button id="checkManage" type="button" class="secondary">检查成员管理权限</button></div><pre id="checkResult"></pre></section>
-  </main><footer>教学演示原型 · Sprint 1 权限基线 + Sprint 2 协作增量 · 服务器执行权限校验</footer>
+
+    <section id="adminPanel" class="panel" hidden>
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">ADMINISTRATION</p>
+          <h2>管理配置</h2>
+        </div>
+      </div>
+      <p class="panel-lead">建议顺序：先建角色并勾选权限，再建演示账号与项目。界面会按当前账号隐藏无权操作的入口，但真正的权限判断全部在服务器端执行。</p>
+      <div class="form-grid">
+        <form id="roleForm" hidden>
+          <h3>创建角色</h3>
+          <label>角色名称
+            <input name="name" maxlength="30" required placeholder="如 项目经理">
+          </label>
+          <p class="hint">1—30 个字符；创建后在下方矩阵中勾选权限并保存。</p>
+          <button type="submit">创建角色</button>
+        </form>
+        <form id="userForm" hidden>
+          <h3>创建演示账号</h3>
+          <label>邮箱
+            <input name="email" type="email" required autocomplete="off" placeholder="member@example.com">
+          </label>
+          <label>密码
+            <input name="password" type="password" minlength="8" required autocomplete="new-password" placeholder="至少 8 位字符">
+          </label>
+          <p class="hint">用于演示成员视角；创建后再到项目成员中加入并指派角色。</p>
+          <button type="submit">创建账号</button>
+        </form>
+      </div>
+
+      <div id="matrixPanel" hidden>
+        <h3>角色—权限矩阵</h3>
+        <p class="hint">勾选后点击该行的“保存权限”。含管理类权限的角色会自动包含“查看项目”，且不能授予自己未持有的权限。</p>
+        <div class="table-wrap">
+          <table id="matrix">
+            <caption class="visually-hidden">角色与权限对照表</caption>
+            <thead>
+              <tr>
+                <th scope="col">角色</th>
+                <th scope="col">查看项目</th>
+                <th scope="col">管理成员</th>
+                <th scope="col">管理项目</th>
+                <th scope="col">管理角色</th>
+                <th scope="col">操作</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="empty-state" id="matrixEmpty">还没有创建角色。先在上方“创建角色”表单建立角色，再回到这里配置权限。</p>
+      </div>
+
+      <form id="projectForm" hidden>
+        <h3>创建项目</h3>
+        <label>项目名称
+          <input name="name" maxlength="60" required placeholder="如 蜂鸟演示项目">
+        </label>
+        <p class="hint">创建者自动成为该项目的项目内管理者，可管理成员、需求与任务；该身份不包含平台级角色管理权。</p>
+        <button type="submit">创建项目</button>
+      </form>
+    </section>
+
+    <section class="panel" id="collaborationPanel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">PROJECT WORKSPACE</p>
+          <h2>项目工作区</h2>
+        </div>
+        <label class="project-picker">当前项目
+          <select id="projectPicker" aria-describedby="pickerHint"><option value="">暂无项目</option></select>
+        </label>
+      </div>
+      <p class="hint" id="pickerHint">切换项目后，成员、需求与看板会同步刷新；页面只显示当前项目的数据，跨项目内容不会混入。</p>
+      <div id="projects"></div>
+    </section>
+
+    <section id="checkPanel" class="panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">ACCESS CHECK</p>
+          <h2>权限验证</h2>
+        </div>
+      </div>
+      <p class="panel-lead">选择项目后，向服务器发起“查看成员”和“管理成员”请求，直接观察访问控制结果：200 表示放行，403 表示被拒绝，401 表示未登录。</p>
+      <div class="inline">
+        <select id="checkProject" aria-label="选择项目"></select>
+        <button id="checkView" type="button" class="secondary">检查项目访问</button>
+        <button id="checkManage" type="button" class="secondary">检查成员管理权限</button>
+      </div>
+      <pre id="checkResult" aria-label="权限检查结果" aria-live="polite">尚未发起检查。结果会以 JSON 显示在此处。</pre>
+    </section>
+  </main>
+
+  <footer>教学演示原型 · Sprint 1 权限基线 + Sprint 2 协作增量 · 服务器执行权限校验</footer>
 </div>
+
 <dialog id="taskDialog" aria-labelledby="taskDialogTitle">
   <form id="editTaskForm">
-    <div class="section-heading"><h2 id="taskDialogTitle">编辑任务</h2><button type="button" id="closeTaskDialog" class="secondary">关闭</button></div>
-    <label>任务标题<input name="title" maxlength="100" required></label>
-    <label>关联需求<select name="requirement_id"></select></label>
-    <label>负责人<select name="assignee_user_id"></select></label>
-    <label>截止日<input name="due_date" type="date"></label>
-    <label>状态<select name="status"></select></label>
-    <p id="taskDialogError" class="error" role="alert"></p>
+    <div class="section-heading">
+      <h2 id="taskDialogTitle">编辑任务</h2>
+      <button type="button" id="closeTaskDialog" class="secondary">关闭</button>
+    </div>
+    <label>任务标题
+      <input name="title" maxlength="100" required>
+    </label>
+    <label>关联需求
+      <select name="requirement_id"></select>
+    </label>
+    <p class="hint" id="taskRequirementHint">只能关联同一项目内未归档的需求；选择“不关联”表示该任务暂不挂接需求。已归档的原关联会保留并标注“已归档”。</p>
+    <label>负责人
+      <select name="assignee_user_id"></select>
+    </label>
+    <p class="hint">只能指派当前项目的成员；成员被移出项目时，其负责的任务会保留并清空负责人。</p>
+    <label>截止日
+      <input name="due_date" type="date">
+    </label>
+    <p class="hint">留空表示不设截止日；已完成的任务不计入逾期提示。</p>
+    <label>状态
+      <select name="status"></select>
+    </label>
+    <p class="hint">保存时会校验版本号；若他人已修改，会提示关闭弹窗并刷新后重试，不会覆盖别人的改动。</p>
+    <p id="taskDialogError" class="error dialog-error" role="alert" tabindex="-1"></p>
     <div class="dialog-actions">
+      <button type="button" class="secondary" data-dialog-refresh hidden>刷新数据</button>
       <button type="submit">保存修改</button>
     </div>
   </form>
 </dialog>
+
 <dialog id="requirementDialog" aria-labelledby="requirementDialogTitle">
   <form id="editRequirementForm">
-    <div class="section-heading"><h2 id="requirementDialogTitle">编辑需求</h2><button type="button" id="closeRequirementDialog" class="secondary">关闭</button></div>
-    <label>需求标题<input name="title" maxlength="80" required></label>
-    <label>需求说明<input name="description" maxlength="500"></label>
-    <p id="requirementDialogError" class="error" role="alert"></p>
-    <button type="submit">保存修改</button>
+    <div class="section-heading">
+      <h2 id="requirementDialogTitle">编辑需求</h2>
+      <button type="button" id="closeRequirementDialog" class="secondary">关闭</button>
+    </div>
+    <label>需求标题
+      <input name="title" maxlength="80" required>
+    </label>
+    <p class="hint">1—80 个字符。保存只改标题与说明，任务关联与创建人不变。</p>
+    <label>需求说明
+      <input name="description" maxlength="500">
+    </label>
+    <p class="hint">最多 500 字，可留空。已归档的需求须先恢复才能编辑。</p>
+    <p id="requirementDialogError" class="error dialog-error" role="alert" tabindex="-1"></p>
+    <div class="dialog-actions">
+      <button type="button" class="secondary" data-dialog-refresh hidden>刷新数据</button>
+      <button type="submit">保存修改</button>
+    </div>
   </form>
 </dialog>
-<script src="app.js"></script></body></html>
+<script src="app.js"></script>
+</body>
+</html>
