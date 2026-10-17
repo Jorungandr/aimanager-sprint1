@@ -10,6 +10,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from service import AppError, SCHEMA_VERSION, Store
+import database
 
 
 class RequirementTests(unittest.TestCase):
@@ -159,6 +160,21 @@ class RequirementTests(unittest.TestCase):
 
 
 class DatabaseUpdateTests(unittest.TestCase):
+    def test_database_module_supports_memory_connection(self):
+        with closing(database.open_database(':memory:')) as connection:
+            self.assertIs(connection.row_factory, sqlite3.Row)
+            self.assertEqual(connection.execute('PRAGMA foreign_keys').fetchone()[0], 1)
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], SCHEMA_VERSION)
+
+    def test_failed_initialization_closes_connection(self):
+        connection = sqlite3.connect(':memory:')
+        with patch.object(database.sqlite3, 'connect', return_value=connection), \
+                patch.object(database, '_initialize', side_effect=RuntimeError('test failure')):
+            with self.assertRaisesRegex(RuntimeError, 'test failure'):
+                database.open_database(':memory:')
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connection.execute('SELECT 1')
+
     def test_schema_version_and_idempotent_reopen(self):
         with tempfile.TemporaryDirectory() as directory:
             path = str(Path(directory) / 'db.sqlite')

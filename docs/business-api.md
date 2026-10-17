@@ -6,6 +6,8 @@
 
 继续使用`from service import Store, AppError`，以及`Store(path)`、`store.db`、`store.close()`。数据库为SQLite；不需要安装MySQL或改变现有启动方式。
 
+`database.py`负责SQLite连接、建表、备份、增量迁移和索引初始化；`service.py`保留业务规则。`SCHEMA_VERSION`仍可从`service`导入。`database.open_database(path)`返回调用者负责关闭的连接，初始化失败自动关闭；不支持的新版数据库由`Store`保持映射为`AppError(409)`。HTTP和页面无需因拆分而修改导入或调用。
+
 ## 需求函数
 
 | 函数 | 参数及行为 |
@@ -55,4 +57,4 @@ HTTP入口必须先认证，再用`store.require_permission(user, project_id, 'p
 
 正常数据路径为`data/aimanager.db`；迁移前的备份可能为`.pre-hardening.bak`和`.pre-requirements.bak`。备份含私人数据，不提交到Git。旧数据不清空；`PRAGMA user_version`记录结构版本，新于程序支持范围的数据库拒绝打开。
 
-运行`python -m unittest discover -s tests -v`，自动包含`tests/test_requirements_service.py`的15项专项检查。所有测试使用临时数据库，覆盖归档恢复、跨项目、版本冲突、并发新关联、旧库迁移和索引查询计划。
+运行`python -m unittest discover -s tests -v`，自动包含`tests/test_requirements_service.py`的17项专项检查；全库共44项后端测试。所有测试使用临时数据库，覆盖归档恢复、跨项目、版本冲突、并发新关联、旧库迁移、索引查询计划及初始化失败的连接释放。
