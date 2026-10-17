@@ -2,6 +2,7 @@
 from contextlib import closing
 from pathlib import Path
 import sqlite3
+import tempfile
 
 SCHEMA_VERSION = 2
 
@@ -14,7 +15,8 @@ def open_database(path):
     """Return an initialized SQLite connection; close it on any setup failure."""
     db = sqlite3.connect(path, check_same_thread=False)
     try:
-        _initialize(db, path)
+        with db:
+            _initialize(db, path)
     except Exception:
         db.close()
         raise
@@ -27,7 +29,19 @@ def _initialize(db, path):
     if db.execute('PRAGMA user_version').fetchone()[0] > SCHEMA_VERSION:
         raise DatabaseVersionError('数据库版本高于当前程序支持范围，请使用更新版本的程序。')
     db.execute('PRAGMA foreign_keys=ON')
+    task_columns = {row['name'] for row in db.execute('PRAGMA table_info(tasks)')}
+    project_columns = {row['name'] for row in db.execute('PRAGMA table_info(projects)')}
+    requirement_columns = {row['name'] for row in db.execute('PRAGMA table_info(requirements)')}
+    has_users = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'").fetchone()
+    if str(path) != ':memory:' and has_users and db.execute('SELECT 1 FROM users LIMIT 1').fetchone():
+        if 'version' not in task_columns or 'owner_user_id' not in project_columns:
+            _backup(db, path, '.pre-hardening.bak')
+        if not {'version', 'archived'}.issubset(requirement_columns):
+            _backup(db, path, '.pre-requirements.bak')
+    # executescript commits any existing transaction: begin inside the script.
+    # The caller commits all schema/data changes together or rolls them back.
     db.executescript('''
+      BEGIN IMMEDIATE;
       CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,
         is_admin INTEGER NOT NULL DEFAULT 0);
@@ -62,42 +76,43 @@ def _initialize(db, path):
         created_by INTEGER NOT NULL REFERENCES users(id),
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
     ''')
-    # Back up the pre-migration database once, using SQLite's consistent snapshot.
+    # Re-read columns because the script may have created new tables.
     task_columns = {row['name'] for row in db.execute('PRAGMA table_info(tasks)')}
     project_columns = {row['name'] for row in db.execute('PRAGMA table_info(projects)')}
     if 'version' not in task_columns or 'owner_user_id' not in project_columns:
-        if path != ':memory:' and db.execute('SELECT COUNT(*) AS n FROM users').fetchone()['n']:
-            backup = Path(str(path) + '.pre-hardening.bak')
-            if not backup.exists():
-                with closing(sqlite3.connect(str(backup))) as snapshot:
-                    db.backup(snapshot)
-        with db:
-            if 'version' not in task_columns:
-                db.execute('ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1')
-            if 'owner_user_id' not in project_columns:
-                db.execute('ALTER TABLE projects ADD COLUMN owner_user_id INTEGER REFERENCES users(id)')
-    with db:
-        db.execute('''INSERT OR IGNORE INTO role_permissions(role_id,permission)
-            SELECT DISTINCT role_id,'project.view' FROM role_permissions WHERE permission IN
-            ('members.manage','workitems.manage','roles.manage','projects.manage')''')
+        if 'version' not in task_columns:
+            db.execute('ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1')
+        if 'owner_user_id' not in project_columns:
+            db.execute('ALTER TABLE projects ADD COLUMN owner_user_id INTEGER REFERENCES users(id)')
+    db.execute('''INSERT OR IGNORE INTO role_permissions(role_id,permission)
+        SELECT DISTINCT role_id,'project.view' FROM role_permissions WHERE permission IN
+        ('members.manage','workitems.manage','roles.manage','projects.manage')''')
     requirement_columns = {row['name'] for row in db.execute('PRAGMA table_info(requirements)')}
     if not {'version', 'archived'}.issubset(requirement_columns):
-        if str(path) != ':memory:' and db.execute('SELECT COUNT(*) AS n FROM users').fetchone()['n']:
-            backup = Path(str(path) + '.pre-requirements.bak')
-            if not backup.exists():
-                with closing(sqlite3.connect(str(backup))) as snapshot:
-                    db.backup(snapshot)
-        with db:
-            db.execute('BEGIN IMMEDIATE')
-            if 'version' not in requirement_columns:
-                db.execute('ALTER TABLE requirements ADD COLUMN version INTEGER NOT NULL DEFAULT 1')
-            if 'archived' not in requirement_columns:
-                db.execute('ALTER TABLE requirements ADD COLUMN archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1))')
-    with db:
-        db.execute('CREATE INDEX IF NOT EXISTS idx_requirements_project_archived ON requirements(project_id,archived,id)')
-        db.execute('CREATE INDEX IF NOT EXISTS idx_tasks_project_status_position ON tasks(project_id,status,position,id)')
-        db.execute('CREATE INDEX IF NOT EXISTS idx_tasks_project_assignee ON tasks(project_id,assignee_user_id)')
-        db.execute('CREATE INDEX IF NOT EXISTS idx_memberships_user ON memberships(user_id,project_id,role_id)')
-        # v1: task versions and project owners; v2: requirement versions/archive.
-        # Column checks above also repair legacy schemas that have no version marker.
-        db.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
+        if 'version' not in requirement_columns:
+            db.execute('ALTER TABLE requirements ADD COLUMN version INTEGER NOT NULL DEFAULT 1')
+        if 'archived' not in requirement_columns:
+            db.execute('ALTER TABLE requirements ADD COLUMN archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1))')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_requirements_project_archived ON requirements(project_id,archived,id)')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_tasks_project_status_position ON tasks(project_id,status,position,id)')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_tasks_project_assignee ON tasks(project_id,assignee_user_id)')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_memberships_user ON memberships(user_id,project_id,role_id)')
+    # v1: task versions and project owners; v2: requirement versions/archive.
+    db.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
+
+
+def _backup(db, path, suffix):
+    backup = Path(str(path) + suffix)
+    if backup.exists():
+        if not backup.is_file():
+            raise OSError(f'Backup path is not a file: {backup}')
+        return
+    # Publish only a complete snapshot; a failed backup must not block retries.
+    with tempfile.NamedTemporaryFile(dir=backup.parent, prefix=backup.name + '.', suffix='.tmp', delete=False) as pending:
+        temporary = Path(pending.name)
+    try:
+        with closing(sqlite3.connect(str(temporary))) as snapshot:
+            db.backup(snapshot)
+        temporary.replace(backup)
+    finally:
+        temporary.unlink(missing_ok=True)

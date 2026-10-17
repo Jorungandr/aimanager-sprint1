@@ -160,6 +160,103 @@ class RequirementTests(unittest.TestCase):
 
 
 class DatabaseUpdateTests(unittest.TestCase):
+    def test_migration_failure_rolls_back_entire_upgrade(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / 'legacy.sqlite')
+            with closing(database.open_database(path)) as connection:
+                connection.execute('ALTER TABLE tasks DROP COLUMN version')
+                connection.execute('ALTER TABLE projects DROP COLUMN owner_user_id')
+                connection.execute('DROP INDEX idx_requirements_project_archived')
+                connection.execute('ALTER TABLE requirements DROP COLUMN archived')
+                connection.execute('ALTER TABLE requirements DROP COLUMN version')
+                connection.execute('PRAGMA user_version=0')
+                # A conflicting legacy index forces failure after column migration.
+                connection.execute('DROP INDEX idx_tasks_project_assignee')
+                connection.execute('CREATE TABLE idx_tasks_project_assignee(value TEXT)')
+                connection.execute("INSERT INTO roles VALUES(1,'Legacy manager')")
+                connection.execute("INSERT INTO role_permissions VALUES(1,'members.manage')")
+                connection.commit()
+                before = list(connection.iterdump())
+            with self.assertRaises(sqlite3.OperationalError):
+                with closing(database.open_database(path)):
+                    pass
+            with closing(sqlite3.connect(path)) as connection:
+                self.assertEqual(list(connection.iterdump()), before)
+                self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 0)
+
+    def test_backup_failure_does_not_modify_legacy_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / 'legacy.sqlite')
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute('CREATE TABLE users(id INTEGER PRIMARY KEY)')
+                connection.execute('INSERT INTO users VALUES(1)')
+                connection.commit()
+                before = list(connection.iterdump())
+            Path(path + '.pre-hardening.bak').mkdir()
+            with self.assertRaises(OSError):
+                with closing(database.open_database(path)):
+                    pass
+            with closing(sqlite3.connect(path)) as connection:
+                self.assertEqual(list(connection.iterdump()), before)
+
+    def test_backup_restores_original_schema_and_can_upgrade_again(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / 'legacy.sqlite')
+            with closing(database.open_database(path)) as connection:
+                connection.execute("INSERT INTO users VALUES(1,'restore@example.test','hash',1)")
+                connection.execute("INSERT INTO projects(id,name) VALUES(1,'Preserved')")
+                connection.execute('DROP INDEX idx_requirements_project_archived')
+                connection.execute('ALTER TABLE requirements DROP COLUMN archived')
+                connection.execute('ALTER TABLE requirements DROP COLUMN version')
+                connection.execute('PRAGMA user_version=1')
+                connection.commit()
+                before = list(connection.iterdump())
+            with closing(database.open_database(path)):
+                pass
+            backup = path + '.pre-requirements.bak'
+            restored = str(Path(directory) / 'restored.sqlite')
+            with closing(sqlite3.connect(backup)) as snapshot, closing(sqlite3.connect(restored)) as target:
+                self.assertEqual(list(snapshot.iterdump()), before)
+                snapshot.backup(target)
+            with closing(database.open_database(restored)) as connection:
+                self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+                self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+                self.assertEqual(connection.execute('SELECT name FROM projects').fetchone()[0], 'Preserved')
+                self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], SCHEMA_VERSION)
+            saved_bytes = Path(backup).read_bytes()
+            with closing(database.open_database(path)):
+                pass
+            self.assertEqual(Path(backup).read_bytes(), saved_bytes)
+
+    def test_interrupted_backup_is_not_published_and_retry_succeeds(self):
+        class InterruptedConnection(sqlite3.Connection):
+            def backup(self, target, **kwargs):
+                target.execute('CREATE TABLE incomplete(value TEXT)')
+                target.commit()
+                raise sqlite3.OperationalError('simulated backup interruption')
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / 'legacy.sqlite')
+            with closing(database.open_database(path)) as connection:
+                connection.execute("INSERT INTO users VALUES(1,'backup@example.test','hash',1)")
+                connection.execute('ALTER TABLE tasks DROP COLUMN version')
+                connection.commit()
+                before = list(connection.iterdump())
+            connect = sqlite3.connect
+            def interrupted_connect(*args, **kwargs):
+                return connect(*args, **kwargs, factory=InterruptedConnection)
+            with patch.object(database.sqlite3, 'connect', side_effect=interrupted_connect):
+                with self.assertRaisesRegex(sqlite3.OperationalError, 'simulated backup interruption'):
+                    database.open_database(path)
+            self.assertFalse(Path(path + '.pre-hardening.bak').exists())
+            self.assertEqual(list(Path(directory).glob('*.tmp')), [])
+            with closing(sqlite3.connect(path)) as connection:
+                self.assertEqual(list(connection.iterdump()), before)
+            with closing(database.open_database(path)) as connection:
+                self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], SCHEMA_VERSION)
+            with closing(sqlite3.connect(path + '.pre-hardening.bak')) as snapshot:
+                self.assertEqual(list(snapshot.iterdump()), before)
+
     def test_database_module_supports_memory_connection(self):
         with closing(database.open_database(':memory:')) as connection:
             self.assertIs(connection.row_factory, sqlite3.Row)
