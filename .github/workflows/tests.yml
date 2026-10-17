@@ -21,3 +21,13 @@ jobs:
           python-version: "3.11"
       - name: Run unit and integration tests
         run: python -m unittest discover -s tests -v
+      - name: Set up Node for optional browser regression
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install browser test dependencies
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Run browser regression
+        run: npm run test:browser

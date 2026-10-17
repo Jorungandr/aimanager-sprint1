@@ -19,6 +19,13 @@ async function api(path, options = {}) {
     throw new Error('服务器响应格式异常，请刷新重试。', { cause });
   }
   if (!response.ok) {
+    if (response.status === 401 && current) {
+      current = null;
+      $('workspace').hidden = true;
+      $('logout').hidden = true;
+      $('loginPanel').hidden = false;
+      $('taskDialog').close();
+    }
     const error = new Error(`${response.status} ${data.error || '请求失败'}`);
     error.status = response.status;
     throw error;
@@ -144,17 +151,18 @@ async function renderProjects() {
       ]);
       const canManageMembers = await allowed(`/api/projects/${project.id}/manage-check`);
       const canManageWorkitems = await allowed(`/api/projects/${project.id}/workitems/manage-check`);
+      const assignableRoles = canManageMembers ? await api(`/api/projects/${project.id}/role-options`) : [];
       if (request !== projectRequest) {
         return;
       }
-      renderMembers(card, project, members, canManageMembers);
+      renderMembers(card, project, members, canManageMembers, assignableRoles);
       renderWorkItems(card, project, members, requirements, tasks, canManageWorkitems);
     } catch (error) {
       const problem = document.createElement('p'); problem.className = 'error'; problem.textContent = error.message; card.append(problem);
     }
   }
 }
-function renderMembers(card, project, members, canManage) {
+function renderMembers(card, project, members, canManage, assignableRoles) {
   const details = document.createElement('details');
   const summary = document.createElement('summary');
   summary.textContent = `项目成员 · ${members.length} 人${canManage ? ' · 展开管理' : ''}`;
@@ -165,7 +173,7 @@ function renderMembers(card, project, members, canManage) {
   if (!members.length) list.textContent = '暂无成员';
   for (const member of members) {
     const row = document.createElement('p'); row.textContent = `${member.email} · ${member.role_name} `;
-    if (canManage) {
+    if (canManage && !member.is_owner) {
       const remove = document.createElement('button'); remove.className = 'danger'; remove.textContent = '移出项目';
       remove.addEventListener('click', async () => { if (!confirm(`移出 ${member.email}？`)) return; try { await api(`/api/projects/${project.id}/members/${member.user_id}`, { method: 'DELETE' }); say('成员已移出，权限已回收'); await refresh(); } catch (e) { say(e.message, true); } });
       row.append(remove);
@@ -176,8 +184,9 @@ function renderMembers(card, project, members, canManage) {
   if (!canManage) return;
   const form = document.createElement('form'); form.className = 'inline compact-form';
   const userSelect = document.createElement('select'); userSelect.name = 'user_id'; userSelect.setAttribute('aria-label', '选择账号'); users.forEach(u => userSelect.append(option(u.id, u.email)));
-  const roleSelect = document.createElement('select'); roleSelect.name = 'role_id'; roleSelect.setAttribute('aria-label', '选择角色'); roleOptions.forEach(r => roleSelect.append(option(r.id, r.name)));
+  const roleSelect = document.createElement('select'); roleSelect.name = 'role_id'; roleSelect.setAttribute('aria-label', '选择可授权角色'); assignableRoles.forEach(r => roleSelect.append(option(r.id, r.name)));
   const add = document.createElement('button'); add.textContent = '加入并指派角色'; form.append(userSelect, roleSelect, add);
+  add.disabled = !assignableRoles.length || !users.length;
   form.addEventListener('submit', event => { event.preventDefault(); submit(form, `/api/projects/${project.id}/members`, refresh); }); card.append(form);
 }
 function renderWorkItems(card, project, members, requirements, tasks, canManage) {
@@ -249,7 +258,21 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
     const columnTitle = document.createElement('h5'); columnTitle.textContent = `${label} (${visible.filter(task => task.status === status).length})`; column.append(columnTitle);
     if (canManage) {
       column.addEventListener('dragover', event => event.preventDefault());
-      column.addEventListener('drop', async event => { event.preventDefault(); const taskId = event.dataTransfer.getData('text/plain'); if (!taskId) return; try { await api(`/api/projects/${project.id}/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify({ status }) }); say('任务状态已更新'); await refresh(); } catch (error) { say(error.message, true); } });
+      column.addEventListener('drop', async event => {
+        event.preventDefault();
+        const taskId = event.dataTransfer.getData('text/plain');
+        const task = tasks.find(item => String(item.id) === taskId);
+        if (!task) {
+          return;
+        }
+        try {
+          await api(`/api/projects/${project.id}/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify({ status, version: task.version }) });
+          say('任务状态已更新');
+          await refresh();
+        } catch (error) {
+          say(error.message, true);
+        }
+      });
     }
     for (const task of visible.filter(item => item.status === status)) {
       const item = document.createElement('article'); item.className = 'task-card'; item.draggable = canManage; item.addEventListener('dragstart', event => event.dataTransfer.setData('text/plain', task.id));
@@ -278,7 +301,7 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
         statusSelect.addEventListener('change', async () => {
           statusSelect.disabled = true;
           try {
-            await api(`/api/projects/${project.id}/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify({ status: statusSelect.value }) });
+            await api(`/api/projects/${project.id}/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify({ status: statusSelect.value, version: task.version }) });
             say('任务状态已更新');
             await renderProjects();
           } catch (error) {
@@ -334,12 +357,12 @@ $('editTaskForm').addEventListener('submit', async event => {
   const button = event.currentTarget.querySelector('[type="submit"]');
   button.disabled = true;
   try {
-    await api(`/api/projects/${editingTask.project.id}/tasks/${editingTask.task.id}`, { method: 'PUT', body: JSON.stringify(formData(event.currentTarget)) });
+    await api(`/api/projects/${editingTask.project.id}/tasks/${editingTask.task.id}`, { method: 'PUT', body: JSON.stringify({ ...formData(event.currentTarget), version: editingTask.task.version }) });
     $('taskDialog').close();
     say('任务修改已保存');
     await renderProjects();
   } catch (error) {
-    $('taskDialogError').textContent = error.message;
+    $('taskDialogError').textContent = error.status === 409 ? `${error.message} 当前输入尚未保存；请关闭弹窗后点击刷新数据。` : error.message;
   } finally {
     button.disabled = false;
   }
