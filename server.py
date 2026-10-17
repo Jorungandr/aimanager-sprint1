@@ -179,6 +179,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({'ok': True}, cookie='; Max-Age=0')
 
             user = self.user()
+            # Validate numeric route segments before int conversion and SQL binding.
+            for identifier in re.findall(r'/(\d+)(?=/|$)', path):
+                self.store._integer(identifier, '路径编号')
             if method == 'GET' and path == '/api/me':
                 return self.reply(self.user_with_capabilities(user))
             if path == '/api/users':
@@ -234,6 +237,8 @@ class Handler(BaseHTTPRequestHandler):
                 if method == 'POST':
                     self.store.require_permission(user, project_id, 'workitems.manage')
                     data = self.payload()
+                    if set(data) - {'title', 'description', 'created_by'}:
+                        raise AppError('需求创建字段不合法。')
                     return self.reply(self.store.create_requirement(
                         project_id, data.get('title', ''), data.get('description', ''), user['id']), 201)
                 raise AppError('不支持的请求方法。', 405)
@@ -280,6 +285,9 @@ class Handler(BaseHTTPRequestHandler):
                 if method == 'POST':
                     self.store.require_permission(user, project_id, 'workitems.manage')
                     data = self.payload()
+                    if set(data) - {'title', 'requirement_id', 'assignee_user_id',
+                                    'due_date', 'status', 'created_by'}:
+                        raise AppError('任务创建字段不合法。')
                     return self.reply(self.store.create_task(
                         project_id, data.get('title', ''), data.get('requirement_id'),
                         data.get('assignee_user_id'), data.get('due_date'), user['id'],

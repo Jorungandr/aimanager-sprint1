@@ -211,6 +211,32 @@ class BusinessApiContractTests(unittest.TestCase):
         self.assertEqual((empty['items'], empty['total'], empty['total_pages']), ([], 0, 0))
         self.assertEqual(self.snapshot(), before)
 
+    def test_creation_rejects_unknown_fields_without_writes(self):
+        before = self.snapshot()
+        for route, payload in (
+            ('tasks', {'title': 'Typo link', 'requrement_id': self.requirement['id']}),
+            ('tasks', {'title': 'Unknown', 'unsupported': True}),
+            ('requirements', {'title': 'Unknown', 'unsupported': True}),
+        ):
+            with self.subTest(route=route, payload=payload):
+                self.expect(self.admin, self.base_path + '/' + route, 400, 'POST', payload)
+                self.assertEqual(self.snapshot(), before)
+
+    def test_oversized_path_identifiers_return_400_without_writes(self):
+        before = self.snapshot()
+        for client in (self.admin, self.viewer):
+            for path in (
+                '/api/projects/9223372036854775808/tasks',
+                '/api/projects/9223372036854775808/requirements',
+                '/api/projects/9223372036854775808/tasks/query',
+                self.base_path + '/tasks/9223372036854775808',
+                self.base_path + '/requirements/9223372036854775808',
+            ):
+                with self.subTest(path=path):
+                    method = 'PUT' if '/tasks/922' in path else 'GET'
+                    self.expect(client, path, 400, method, {'title': 'Denied', 'version': 1})
+                    self.assertEqual(self.snapshot(), before)
+
     def test_failed_task_updates_preserve_entire_database(self):
         before = self.snapshot()
         for client, payload, status in (
