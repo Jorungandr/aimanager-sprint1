@@ -284,6 +284,57 @@ class Store:
                                 (project_id, user_id))
         if not cur.rowcount:
             raise AppError('成员关系不存在。', 404)
+
+    def get_requirement(self, project_id, requirement_id):
+        row = self._one('''SELECT id,project_id,title,description,created_by,created_at
+            FROM requirements WHERE project_id=? AND id=?''', (project_id, requirement_id))
+        if not row:
+            raise AppError('需求不存在或不属于当前项目。', 404)
+        return dict(row)
+
+    def update_requirement(self, project_id, requirement_id, changes):
+        current = self.get_requirement(project_id, requirement_id)
+        allowed = {'title', 'description'}
+        if not isinstance(changes, dict) or not changes or any(key not in allowed for key in changes):
+            raise AppError('需求更新字段不合法。')
+        title = self._short_text(changes.get('title', current['title']), '需求标题', 80)
+        description = str(changes.get('description', current['description'])).strip()
+        if len(description) > 500:
+            raise AppError('需求说明不得超过 500 字。')
+        with self.db:
+            self.db.execute('UPDATE requirements SET title=?,description=? WHERE project_id=? AND id=?',
+                            (title, description, project_id, requirement_id))
+        return self.get_requirement(project_id, requirement_id)
+
+    def delete_requirement(self, project_id, requirement_id):
+        self.get_requirement(project_id, requirement_id)
+        with self.db:
+            self.db.execute('DELETE FROM requirements WHERE project_id=? AND id=?',
+                            (project_id, requirement_id))
+
+    def delete_task(self, project_id, task_id):
+        self.get_task(project_id, task_id)
+        with self.db:
+            self.db.execute('DELETE FROM tasks WHERE project_id=? AND id=?', (project_id, task_id))
+
+    def update_role_name(self, role_id, name):
+        name = str(name).strip()
+        if not name or len(name) > 30:
+            raise AppError('角色名称应为 1 至 30 字。')
+        if not self._one('SELECT id FROM roles WHERE id=?', (role_id,)):
+            raise AppError('角色不存在。', 404)
+        try:
+            with self.db:
+                self.db.execute('UPDATE roles SET name=? WHERE id=?', (name, role_id))
+        except sqlite3.IntegrityError as exc:
+            raise AppError('角色名称已存在。') from exc
+
+    def delete_role(self, role_id):
+        if not self._one('SELECT id FROM roles WHERE id=?', (role_id,)):
+            raise AppError('角色不存在。', 404)
+        with self.db:
+            self.db.execute('DELETE FROM roles WHERE id=?', (role_id,))
+
     def _project_exists(self, project_id):
         if not self._one('SELECT id FROM projects WHERE id=?', (project_id,)):
             raise AppError('项目不存在。', 404)
@@ -339,13 +390,6 @@ class Store:
             cur = self.db.execute('''INSERT INTO requirements(project_id,title,description,created_by)
                 VALUES(?,?,?,?)''', (project_id, title, description, created_by))
         return self.get_requirement(project_id, cur.lastrowid)
-
-    def get_requirement(self, project_id, requirement_id):
-        row = self._one('''SELECT id,project_id,title,description,created_by,created_at
-            FROM requirements WHERE project_id=? AND id=?''', (project_id, requirement_id))
-        if not row:
-            raise AppError('需求不存在或不属于当前项目。', 404)
-        return dict(row)
 
     def list_tasks(self, project_id):
         self._project_exists(project_id)

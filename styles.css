@@ -52,6 +52,10 @@ progress { width: 190px; height: 9px; accent-color: #2b8b81; }
 .task-actions { display: flex; gap: 7px; margin-top: 16px; align-items: center; }
 .task-actions select { min-width: 0; width: 100%; min-height: 34px; font-size: 12px; padding: 5px; }
 .task-actions button { min-height: 34px; font-size: 12px; padding: 5px 10px; flex-shrink: 0; }
+.requirement-actions { display: inline-flex; gap: 6px; margin-left: 12px; vertical-align: middle; }
+.requirement-actions button { min-height: 28px; font-size: 11px; padding: 4px 8px; }
+.dialog-actions { display: flex; gap: 10px; margin-top: 16px; align-items: center; }
+.dialog-actions button { flex: 0 0 auto; }
 .empty-state, .column-empty { color: #7b8d9b; padding: 24px 8px; line-height: 1.8; font-size: 13px; }
 #notice:not(:empty) { padding: 12px 16px; border-radius: 8px; background: #e6f1eb; border-left: 3px solid #3a9272; }
 #notice.error:not(:empty) { background: #fff0ec; border-left-color: #b24036; }

@@ -28,17 +28,24 @@ async function api(path, options = {}) {
     }
     const error = new Error(`${response.status} ${data.error || '请求失败'}`);
     error.status = response.status;
+    if (response.status === 401 && current) {
+      current = null;
+      $('workspace').hidden = true;
+      $('logout').hidden = true;
+      $('loginPanel').hidden = false;
+      say('会话已过期，请重新登录', true);
+    }
     throw error;
   }
   return data;
 }
 function say(message, error = false) { $('notice').textContent = message; $('notice').className = error ? 'error' : 'ok'; }
 function formData(form) { return Object.fromEntries(new FormData(form).entries()); }
-async function submit(form, path, after) {
+async function submit(form, path, after, method = 'POST') {
   const buttons = [...form.querySelectorAll('button')];
   buttons.forEach(button => { button.disabled = true; });
   try {
-    const created = await api(path, { method: 'POST', body: JSON.stringify(formData(form)) });
+    const created = await api(path, { method, body: JSON.stringify(formData(form)) });
     if (path === '/api/projects') {
       activeProject = String(created.id);
       activeView = 'collaboration';
@@ -125,9 +132,50 @@ function renderMatrix() {
       const td = document.createElement('td'), check = document.createElement('input'); check.type = 'checkbox'; check.checked = role.permissions.includes(key);
       check.setAttribute('aria-label', `${role.name} ${permissionLabels[key]}`); checks[key] = check; td.append(check); tr.append(td);
     }
-    const action = document.createElement('td'), button = document.createElement('button'); button.textContent = '保存权限';
-    button.addEventListener('click', async () => { try { await api(`/api/roles/${role.id}/permissions`, { method: 'PUT', body: JSON.stringify({ permissions: Object.keys(checks).filter(k => checks[k].checked) }) }); say('权限已保存'); await refresh(); } catch (e) { say(e.message, true); } });
-    action.append(button); tr.append(action); body.append(tr);
+    const action = document.createElement('td');
+    const button = document.createElement('button');
+    button.textContent = '保存权限';
+    button.addEventListener('click', async () => {
+      try {
+        await api(`/api/roles/${role.id}/permissions`, { method: 'PUT', body: JSON.stringify({ permissions: Object.keys(checks).filter(k => checks[k].checked) }) });
+        say('权限已保存');
+        await refresh();
+      } catch (e) {
+        say(e.message, true);
+      }
+    });
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'secondary';
+    editBtn.textContent = '重命名';
+    editBtn.addEventListener('click', async () => {
+      const newName = prompt('输入新角色名称：', role.name);
+      if (!newName || newName === role.name) return;
+      try {
+        await api(`/api/roles/${role.id}`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+        say('角色已重命名');
+        await refresh();
+      } catch (e) {
+        say(e.message, true);
+      }
+    });
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'danger';
+    deleteBtn.textContent = '删除';
+    deleteBtn.addEventListener('click', async () => {
+      if (!confirm(`删除角色"${role.name}"？此操作不可恢复。`)) return;
+      try {
+        await api(`/api/roles/${role.id}`, { method: 'DELETE' });
+        say('角色已删除');
+        await refresh();
+      } catch (e) {
+        say(e.message, true);
+      }
+    });
+    action.append(button, editBtn, deleteBtn);
+    tr.append(action);
+    body.append(tr);
   }
 }
 async function renderProjects() {
@@ -204,7 +252,39 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
   card.append(progress);
   const requirementList = document.createElement('ul'); requirementList.className = 'requirements';
   if (!requirements.length) { const empty = document.createElement('li'); empty.textContent = '暂无需求条目'; requirementList.append(empty); }
-  requirements.forEach(item => { const li = document.createElement('li'); const strong = document.createElement('strong'); strong.textContent = item.title; li.append(strong); if (item.description) li.append(document.createTextNode(` — ${item.description}`)); requirementList.append(li); });
+  requirements.forEach(item => {
+    const li = document.createElement('li');
+    const strong = document.createElement('strong');
+    strong.textContent = item.title;
+    li.append(strong);
+    if (item.description) li.append(document.createTextNode(` — ${item.description}`));
+    if (canManage) {
+      const actions = document.createElement('div');
+      actions.className = 'requirement-actions';
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'secondary';
+      edit.textContent = '编辑';
+      edit.addEventListener('click', () => openRequirementEditor(project, item));
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'danger';
+      remove.textContent = '删除';
+      remove.addEventListener('click', async () => {
+        if (!confirm(`删除需求"${item.title}"？关联的任务将取消关联。`)) return;
+        try {
+          await api(`/api/projects/${project.id}/requirements/${item.id}`, { method: 'DELETE' });
+          say('需求已删除');
+          await refresh();
+        } catch (error) {
+          say(error.message, true);
+        }
+      });
+      actions.append(edit, remove);
+      li.append(actions);
+    }
+    requirementList.append(li);
+  });
   const requirementDetails = document.createElement('details');
   const requirementSummary = document.createElement('summary');
   requirementSummary.textContent = `需求列表 · ${requirements.length} 条`;
@@ -334,6 +414,32 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
   draw();
   card.append(board);
 }
+let editingRequirement = null;
+function openRequirementEditor(project, requirement) {
+  editingRequirement = { project, requirement };
+  const form = $('editRequirementForm');
+  form.elements.title.value = requirement.title;
+  form.elements.description.value = requirement.description || '';
+  $('requirementDialogError').textContent = '';
+  $('requirementDialog').showModal();
+}
+$('closeRequirementDialog').addEventListener('click', () => $('requirementDialog').close());
+$('editRequirementForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!editingRequirement) return;
+  const button = event.currentTarget.querySelector('[type="submit"]');
+  button.disabled = true;
+  try {
+    await api(`/api/projects/${editingRequirement.project.id}/requirements/${editingRequirement.requirement.id}`, { method: 'PUT', body: JSON.stringify(formData(event.currentTarget)) });
+    $('requirementDialog').close();
+    say('需求修改已保存');
+    await renderProjects();
+  } catch (error) {
+    $('requirementDialogError').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
 function openTaskEditor(project, task, members, requirements) {
   editingTask = { project, task };
   const form = $('editTaskForm');
@@ -346,9 +452,25 @@ function openTaskEditor(project, task, members, requirements) {
   form.elements.status.replaceChildren(...Object.entries(statusLabels).map(([key, label]) => option(key, label)));
   form.elements.status.value = task.status;
   $('taskDialogError').textContent = '';
+  $('deleteTaskBtn').hidden = false;
   $('taskDialog').showModal();
 }
 $('closeTaskDialog').addEventListener('click', () => $('taskDialog').close());
+$('deleteTaskBtn').addEventListener('click', async () => {
+  if (!editingTask) return;
+  if (!confirm(`删除任务"${editingTask.task.title}"？此操作不可恢复。`)) return;
+  $('deleteTaskBtn').disabled = true;
+  try {
+    await api(`/api/projects/${editingTask.project.id}/tasks/${editingTask.task.id}`, { method: 'DELETE' });
+    $('taskDialog').close();
+    say('任务已删除');
+    await renderProjects();
+  } catch (error) {
+    $('taskDialogError').textContent = error.message;
+  } finally {
+    $('deleteTaskBtn').disabled = false;
+  }
+});
 $('editTaskForm').addEventListener('submit', async event => {
   event.preventDefault();
   if (!editingTask) {

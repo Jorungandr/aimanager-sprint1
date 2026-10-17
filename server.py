@@ -207,6 +207,17 @@ class Handler(BaseHTTPRequestHandler):
                     raise AppError('需要角色管理权限。', 403)
                 self.store.set_permissions(int(match.group(1)), self.payload().get('permissions'), actor=user)
                 return self.reply({'ok': True})
+            match = re.fullmatch(r'/api/roles/(\d+)', path)
+            if match:
+                if not self.store.has_global_permission(user, 'roles.manage'):
+                    raise AppError('需要角色管理权限。', 403)
+                role_id = int(match.group(1))
+                if method == 'PUT':
+                    self.store.update_role_name(role_id, self.payload().get('name', ''))
+                    return self.reply({'ok': True})
+                if method == 'DELETE':
+                    self.store.delete_role(role_id)
+                    return self.reply({'ok': True})
             if path == '/api/projects':
                 if method == 'GET': return self.reply(self.store.list_projects(user))
                 if method == 'POST':
@@ -236,6 +247,17 @@ class Handler(BaseHTTPRequestHandler):
                     data = self.payload()
                     return self.reply(self.store.create_requirement(
                         project_id, data.get('title', ''), data.get('description', ''), user['id']), 201)
+            match = re.fullmatch(r'/api/projects/(\d+)/requirements/(\d+)', path)
+            if match:
+                project_id, requirement_id = map(int, match.groups())
+                self.store.require_permission(user, project_id, 'workitems.manage')
+                if method == 'GET':
+                    return self.reply(self.store.get_requirement(project_id, requirement_id))
+                if method == 'PUT':
+                    return self.reply(self.store.update_requirement(project_id, requirement_id, self.payload()))
+                if method == 'DELETE':
+                    self.store.delete_requirement(project_id, requirement_id)
+                    return self.reply({'ok': True})
             match = re.fullmatch(r'/api/projects/(\d+)/tasks', path)
             if match:
                 project_id = int(match.group(1))
@@ -250,10 +272,14 @@ class Handler(BaseHTTPRequestHandler):
                         data.get('assignee_user_id'), data.get('due_date'), user['id'],
                         data.get('status', 'backlog')), 201)
             match = re.fullmatch(r'/api/projects/(\d+)/tasks/(\d+)', path)
-            if match and method == 'PUT':
+            if match:
                 project_id, task_id = map(int, match.groups())
                 self.store.require_permission(user, project_id, 'workitems.manage')
-                return self.reply(self.store.update_task(project_id, task_id, self.payload()))
+                if method == 'PUT':
+                    return self.reply(self.store.update_task(project_id, task_id, self.payload()))
+                if method == 'DELETE':
+                    self.store.delete_task(project_id, task_id)
+                    return self.reply({'ok': True})
             match = re.fullmatch(r'/api/projects/(\d+)/members', path)
             if match:
                 project_id = int(match.group(1))
