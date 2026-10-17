@@ -258,6 +258,24 @@ class Handler(BaseHTTPRequestHandler):
                 if method == 'DELETE':
                     self.store.delete_requirement(project_id, requirement_id)
                     return self.reply({'ok': True})
+            match = re.fullmatch(r'/api/projects/(\d+)/requirements/(\d+)/archive', path)
+            if match and method == 'POST':
+                project_id, requirement_id = map(int, match.groups())
+                self.store.require_permission(user, project_id, 'workitems.manage')
+                data = self.payload()
+                version = data.get('version')
+                if version is None:
+                    raise AppError('归档需求须携带版本号，请刷新后重试。', 428)
+                return self.reply(self.store.archive_requirement(project_id, requirement_id, version))
+            match = re.fullmatch(r'/api/projects/(\d+)/requirements/(\d+)/restore', path)
+            if match and method == 'POST':
+                project_id, requirement_id = map(int, match.groups())
+                self.store.require_permission(user, project_id, 'workitems.manage')
+                data = self.payload()
+                version = data.get('version')
+                if version is None:
+                    raise AppError('恢复需求须携带版本号，请刷新后重试。', 428)
+                return self.reply(self.store.restore_requirement(project_id, requirement_id, version))
             match = re.fullmatch(r'/api/projects/(\d+)/tasks', path)
             if match:
                 project_id = int(match.group(1))
@@ -271,6 +289,19 @@ class Handler(BaseHTTPRequestHandler):
                         project_id, data.get('title', ''), data.get('requirement_id'),
                         data.get('assignee_user_id'), data.get('due_date'), user['id'],
                         data.get('status', 'backlog')), 201)
+            match = re.fullmatch(r'/api/projects/(\d+)/tasks/query', path)
+            if match and method == 'GET':
+                project_id = int(match.group(1))
+                self.store.require_permission(user, project_id, 'project.view')
+                from urllib.parse import parse_qs
+                query_string = urlparse(self.path).query
+                params = parse_qs(query_string)
+                page = int(params.get('page', ['1'])[0])
+                page_size = int(params.get('pageSize', ['20'])[0])
+                status = params.get('status', [None])[0]
+                assignee = params.get('assignee', [None])[0]
+                search = params.get('search', [None])[0]
+                return self.reply(self.store.query_tasks(project_id, page, page_size, status, assignee, search))
             match = re.fullmatch(r'/api/projects/(\d+)/tasks/(\d+)', path)
             if match:
                 project_id, task_id = map(int, match.groups())

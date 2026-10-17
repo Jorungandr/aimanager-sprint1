@@ -254,33 +254,59 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
   if (!requirements.length) { const empty = document.createElement('li'); empty.textContent = '暂无需求条目'; requirementList.append(empty); }
   requirements.forEach(item => {
     const li = document.createElement('li');
+    if (item.archived_at) li.className = 'archived';
     const strong = document.createElement('strong');
     strong.textContent = item.title;
     li.append(strong);
+    if (item.archived_at) {
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = '已归档';
+      li.append(badge);
+    }
     if (item.description) li.append(document.createTextNode(` — ${item.description}`));
     if (canManage) {
       const actions = document.createElement('div');
       actions.className = 'requirement-actions';
-      const edit = document.createElement('button');
-      edit.type = 'button';
-      edit.className = 'secondary';
-      edit.textContent = '编辑';
-      edit.addEventListener('click', () => openRequirementEditor(project, item));
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'danger';
-      remove.textContent = '删除';
-      remove.addEventListener('click', async () => {
-        if (!confirm(`删除需求"${item.title}"？关联的任务将取消关联。`)) return;
-        try {
-          await api(`/api/projects/${project.id}/requirements/${item.id}`, { method: 'DELETE' });
-          say('需求已删除');
-          await refresh();
-        } catch (error) {
-          say(error.message, true);
-        }
-      });
-      actions.append(edit, remove);
+      if (item.archived_at) {
+        // 已归档的需求显示恢复按钮
+        const restore = document.createElement('button');
+        restore.type = 'button';
+        restore.className = 'secondary';
+        restore.textContent = '恢复';
+        restore.addEventListener('click', async () => {
+          try {
+            await api(`/api/projects/${project.id}/requirements/${item.id}/restore`, { method: 'POST', body: JSON.stringify({ version: item.version }) });
+            say('需求已恢复');
+            await refresh();
+          } catch (error) {
+            say(error.message, true);
+          }
+        });
+        actions.append(restore);
+      } else {
+        // 未归档的需求显示编辑和归档按钮
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'secondary';
+        edit.textContent = '编辑';
+        edit.addEventListener('click', () => openRequirementEditor(project, item));
+        const archive = document.createElement('button');
+        archive.type = 'button';
+        archive.className = 'danger';
+        archive.textContent = '归档';
+        archive.addEventListener('click', async () => {
+          if (!confirm(`归档需求"${item.title}"？历史任务将保留关联。`)) return;
+          try {
+            await api(`/api/projects/${project.id}/requirements/${item.id}/archive`, { method: 'POST', body: JSON.stringify({ version: item.version }) });
+            say('需求已归档');
+            await refresh();
+          } catch (error) {
+            say(error.message, true);
+          }
+        });
+        actions.append(edit, archive);
+      }
       li.append(actions);
     }
     requirementList.append(li);
@@ -430,7 +456,9 @@ $('editRequirementForm').addEventListener('submit', async event => {
   const button = event.currentTarget.querySelector('[type="submit"]');
   button.disabled = true;
   try {
-    await api(`/api/projects/${editingRequirement.project.id}/requirements/${editingRequirement.requirement.id}`, { method: 'PUT', body: JSON.stringify(formData(event.currentTarget)) });
+    const data = formData(event.currentTarget);
+    data.version = editingRequirement.requirement.version;
+    await api(`/api/projects/${editingRequirement.project.id}/requirements/${editingRequirement.requirement.id}`, { method: 'PUT', body: JSON.stringify(data) });
     $('requirementDialog').close();
     say('需求修改已保存');
     await renderProjects();

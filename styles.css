@@ -56,6 +56,8 @@ progress { width: 190px; height: 9px; accent-color: #2b8b81; }
 .requirement-actions button { min-height: 28px; font-size: 11px; padding: 4px 8px; }
 .dialog-actions { display: flex; gap: 10px; margin-top: 16px; align-items: center; }
 .dialog-actions button { flex: 0 0 auto; }
+.requirements li.archived { opacity: 0.6; text-decoration: line-through; }
+.badge { display: inline-block; margin-left: 8px; padding: 2px 6px; font-size: 11px; background: #94a3b8; color: white; border-radius: 3px; }
 .empty-state, .column-empty { color: #7b8d9b; padding: 24px 8px; line-height: 1.8; font-size: 13px; }
 #notice:not(:empty) { padding: 12px 16px; border-radius: 8px; background: #e6f1eb; border-left: 3px solid #3a9272; }
 #notice.error:not(:empty) { background: #fff0ec; border-left-color: #b24036; }

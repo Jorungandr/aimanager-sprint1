@@ -44,7 +44,9 @@ class Store:
             title TEXT NOT NULL,
             description TEXT NOT NULL DEFAULT '',
             created_by INTEGER NOT NULL REFERENCES users(id),
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            version INTEGER NOT NULL DEFAULT 1,
+            archived_at TEXT);
           CREATE TABLE IF NOT EXISTS tasks (
             id INTEGER PRIMARY KEY,
             project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -286,7 +288,7 @@ class Store:
             raise AppError('成员关系不存在。', 404)
 
     def get_requirement(self, project_id, requirement_id):
-        row = self._one('''SELECT id,project_id,title,description,created_by,created_at
+        row = self._one('''SELECT id,project_id,title,description,created_by,created_at,version,archived_at
             FROM requirements WHERE project_id=? AND id=?''', (project_id, requirement_id))
         if not row:
             raise AppError('需求不存在或不属于当前项目。', 404)
@@ -294,23 +296,54 @@ class Store:
 
     def update_requirement(self, project_id, requirement_id, changes):
         current = self.get_requirement(project_id, requirement_id)
-        allowed = {'title', 'description'}
+        allowed = {'title', 'description', 'version'}
         if not isinstance(changes, dict) or not changes or any(key not in allowed for key in changes):
             raise AppError('需求更新字段不合法。')
+        if 'version' not in changes:
+            raise AppError('更新需求须携带读取时的版本号，请刷新后重试。', 428)
+        version = self._integer(changes['version'], '需求版本')
+        if version != current['version']:
+            raise AppError('需求已被其他操作修改，请刷新后重新编辑。', 409)
         title = self._short_text(changes.get('title', current['title']), '需求标题', 80)
         description = str(changes.get('description', current['description'])).strip()
         if len(description) > 500:
             raise AppError('需求说明不得超过 500 字。')
         with self.db:
-            self.db.execute('UPDATE requirements SET title=?,description=? WHERE project_id=? AND id=?',
-                            (title, description, project_id, requirement_id))
+            result = self.db.execute('UPDATE requirements SET title=?,description=?,version=version+1 WHERE project_id=? AND id=? AND version=?',
+                            (title, description, project_id, requirement_id, version))
+            if result.rowcount != 1:
+                raise AppError('需求已被其他操作修改，请刷新后重新编辑。', 409)
         return self.get_requirement(project_id, requirement_id)
 
-    def delete_requirement(self, project_id, requirement_id):
-        self.get_requirement(project_id, requirement_id)
+    def archive_requirement(self, project_id, requirement_id, version):
+        """归档需求，不永久删除。历史任务保留需求关联。"""
+        current = self.get_requirement(project_id, requirement_id)
+        if current['archived_at']:
+            raise AppError('需求已归档。', 400)
+        if version != current['version']:
+            raise AppError('需求已被其他操作修改，请刷新后重新操作。', 409)
+        from datetime import datetime
+        archived_at = datetime.now().isoformat()
         with self.db:
-            self.db.execute('DELETE FROM requirements WHERE project_id=? AND id=?',
-                            (project_id, requirement_id))
+            result = self.db.execute('UPDATE requirements SET archived_at=?,version=version+1 WHERE project_id=? AND id=? AND version=?',
+                            (archived_at, project_id, requirement_id, version))
+            if result.rowcount != 1:
+                raise AppError('需求已被其他操作修改，请刷新后重新操作。', 409)
+        return self.get_requirement(project_id, requirement_id)
+
+    def restore_requirement(self, project_id, requirement_id, version):
+        """恢复已归档的需求。"""
+        current = self.get_requirement(project_id, requirement_id)
+        if not current['archived_at']:
+            raise AppError('需求未归档。', 400)
+        if version != current['version']:
+            raise AppError('需求已被其他操作修改，请刷新后重新操作。', 409)
+        with self.db:
+            result = self.db.execute('UPDATE requirements SET archived_at=NULL,version=version+1 WHERE project_id=? AND id=? AND version=?',
+                            (project_id, requirement_id, version))
+            if result.rowcount != 1:
+                raise AppError('需求已被其他操作修改，请刷新后重新操作。', 409)
+        return self.get_requirement(project_id, requirement_id)
 
     def delete_task(self, project_id, task_id):
         self.get_task(project_id, task_id)
@@ -371,11 +404,16 @@ class Store:
         if not minimum <= number <= 2**63 - 1:
             raise AppError(f'{label}超出允许范围。')
         return number
-    def list_requirements(self, project_id):
+    def list_requirements(self, project_id, include_archived=False):
         self._project_exists(project_id)
-        return [dict(row) for row in self.db.execute('''
-            SELECT id,project_id,title,description,created_by,created_at
-            FROM requirements WHERE project_id=? ORDER BY id''', (project_id,))]
+        if include_archived:
+            return [dict(row) for row in self.db.execute('''
+                SELECT id,project_id,title,description,created_by,created_at,version,archived_at
+                FROM requirements WHERE project_id=? ORDER BY archived_at IS NULL DESC, id DESC''', (project_id,))]
+        else:
+            return [dict(row) for row in self.db.execute('''
+                SELECT id,project_id,title,description,created_by,created_at,version,archived_at
+                FROM requirements WHERE project_id=? AND archived_at IS NULL ORDER BY id DESC''', (project_id,))]
 
     def create_requirement(self, project_id, title, description, created_by):
         self._project_exists(project_id)
@@ -400,6 +438,50 @@ class Store:
             WHERE t.project_id=?
             ORDER BY CASE t.status WHEN 'backlog' THEN 0 WHEN 'todo' THEN 1
                       WHEN 'doing' THEN 2 ELSE 3 END, t.position, t.id''', (project_id,))]
+
+    def query_tasks(self, project_id, page=1, page_size=20, status=None, assignee=None, search=None):
+        """分页查询任务，支持筛选"""
+        self._project_exists(project_id)
+        conditions = ['t.project_id=?']
+        params = [project_id]
+        if status:
+            conditions.append('t.status=?')
+            params.append(status)
+        if assignee:
+            if assignee == 'unassigned':
+                conditions.append('t.assignee_user_id IS NULL')
+            else:
+                conditions.append('t.assignee_user_id=?')
+                params.append(int(assignee))
+        if search:
+            conditions.append('(t.title LIKE ? OR r.title LIKE ?)')
+            params.extend([f'%{search}%', f'%{search}%'])
+        where_clause = ' AND '.join(conditions)
+        # 计算总数
+        count_sql = f'''SELECT COUNT(*) as total FROM tasks t
+                       LEFT JOIN requirements r ON r.id=t.requirement_id
+                       WHERE {where_clause}'''
+        total = self._one(count_sql, params)['total']
+        # 查询分页数据
+        offset = (page - 1) * page_size
+        data_sql = f'''SELECT t.id,t.project_id,t.requirement_id,t.title,t.assignee_user_id,
+                       u.email AS assignee_email,t.due_date,t.status,t.position,t.created_by,t.created_at,t.version
+                FROM tasks t
+                LEFT JOIN users u ON u.id=t.assignee_user_id
+                LEFT JOIN requirements r ON r.id=t.requirement_id
+                WHERE {where_clause}
+                ORDER BY CASE t.status WHEN 'backlog' THEN 0 WHEN 'todo' THEN 1
+                          WHEN 'doing' THEN 2 ELSE 3 END, t.position, t.id
+                LIMIT ? OFFSET ?'''
+        params.extend([page_size, offset])
+        items = [dict(row) for row in self.db.execute(data_sql, params)]
+        return {
+            'items': items,
+            'total': total,
+            'page': page,
+            'pageSize': page_size,
+            'totalPages': (total + page_size - 1) // page_size
+        }
 
     def _validate_assignee(self, project_id, user_id):
         if isinstance(user_id, bool) or isinstance(user_id, float):
