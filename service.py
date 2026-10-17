@@ -210,6 +210,10 @@ class Store:
         with self.db:
             cur = self.db.execute('DELETE FROM memberships WHERE project_id=? AND user_id=?',
                                   (project_id, user_id))
+            # Preserve work items but release assignments when project access is revoked.
+            if cur.rowcount:
+                self.db.execute('UPDATE tasks SET assignee_user_id=NULL WHERE project_id=? AND assignee_user_id=?',
+                                (project_id, user_id))
         if not cur.rowcount:
             raise AppError('成员关系不存在。', 404)
     def _project_exists(self, project_id):

@@ -74,6 +74,20 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises(AppError):
             self.store.create_task(first['id'], '错误负责人', None, outsider['id'], None, self.admin['id'])
 
+    def test_removed_assignee_is_cleared_only_in_that_project(self):
+        member = self.store.create_user('owner@example.test', 'MemberPass123')
+        role = self.store.create_role('成员')
+        first = self.store.create_project('项目一')
+        second = self.store.create_project('项目二')
+        for project in (first, second):
+            self.store.add_member(project['id'], member['id'], role['id'])
+            self.store.create_task(project['id'], '保留任务', None, member['id'], None, self.admin['id'])
+        self.store.remove_member(first['id'], member['id'])
+        task = self.store.list_tasks(first['id'])[0]
+        self.assertIsNone(task['assignee_user_id'])
+        self.assertEqual(self.store.update_task(first['id'], task['id'], {'status': 'done'})['status'], 'done')
+        self.assertEqual(self.store.list_tasks(second['id'])[0]['assignee_user_id'], member['id'])
+
     def test_task_validates_dates_status_and_update_fields(self):
         project = self.store.create_project('蜂鸟')
         with self.assertRaises(AppError):

@@ -114,6 +114,11 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.req(viewer_client, f"/api/projects/{project['id']}/tasks")[0], 200)
         self.assertEqual(self.req(viewer_client, f"/api/projects/{project['id']}/tasks", 'POST',
                                   {'title': '越权任务'})[0], 403)
+        task_path = f"/api/projects/{project['id']}/tasks/{task['id']}"
+        self.assertEqual(self.req(viewer_client, task_path, 'PUT', {'status': 'done'})[0], 403)
+        self.req(self.admin, f"/api/projects/{project['id']}/members/{manager['id']}", 'DELETE')
+        self.assertEqual(self.req(self.member, task_path, 'PUT', {'status': 'done'})[0], 403)
+        self.assertEqual(self.req(self.member, f"/api/projects/{project['id']}/tasks")[0], 403)
 
 
 if __name__ == '__main__': unittest.main()

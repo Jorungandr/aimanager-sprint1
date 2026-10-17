@@ -7,6 +7,12 @@
   <section id="setupPanel" class="panel" hidden><h2>初始化管理员</h2><p>首次使用时创建平台管理员。请使用演示账号，不要输入真实凭证。</p><form id="setupForm"><label>邮箱<input name="email" type="email" required></label><label>密码<input name="password" type="password" minlength="8" required></label><button>创建并登录</button></form></section>
   <section id="loginPanel" class="panel" hidden><h2>登录工作空间</h2><form id="loginForm"><label>邮箱<input name="email" type="email" required></label><label>密码<input name="password" type="password" required></label><button>登录</button></form></section>
   <main id="workspace" hidden>
+    <nav class="workspace-nav" aria-label="工作区导航">
+      <button type="button" data-view="collaboration" aria-pressed="true">项目协作</button>
+      <button type="button" data-view="administration" aria-pressed="false">管理配置</button>
+      <button type="button" data-view="verification" aria-pressed="false">权限验证</button>
+      <button type="button" id="refreshWorkspace" class="secondary">刷新数据</button>
+    </nav>
     <section class="summary"><div><span>当前账号</span><strong id="currentUser">—</strong></div><div><span>项目</span><strong id="projectCount">0</strong></div><div><span>角色</span><strong id="roleCount">0</strong></div></section>
     <section id="adminPanel" class="panel" hidden><h2>管理配置</h2>
       <div class="form-grid"><form id="roleForm" hidden><h3>创建角色</h3><label>角色名称<input name="name" maxlength="30" required placeholder="如 项目经理"></label><button>创建角色</button></form>
@@ -14,7 +20,20 @@
       <div id="matrixPanel" hidden><h3>角色—权限矩阵</h3><div class="table-wrap"><table id="matrix"><thead><tr><th>角色</th><th>查看项目</th><th>管理成员</th><th>管理项目</th><th>管理角色</th><th>操作</th></tr></thead><tbody></tbody></table></div></div>
       <form id="projectForm" hidden><h3>创建项目</h3><label>项目名称<input name="name" maxlength="60" required placeholder="如 蜂鸟演示项目"></label><button>创建项目</button></form>
     </section>
-    <section class="panel"><h2>项目工作区</h2><div id="projects"></div></section>
+    <section class="panel" id="collaborationPanel"><div class="section-heading"><div><p class="eyebrow">PROJECT WORKSPACE</p><h2>项目工作区</h2></div><label class="project-picker">当前项目<select id="projectPicker"><option value="">暂无项目</option></select></label></div><div id="projects"></div></section>
     <section id="checkPanel" class="panel"><h2>权限验证</h2><p>选择项目后，向服务器发起“查看成员”和“管理成员”请求，直接观察访问控制结果。</p><div class="inline"><select id="checkProject" aria-label="选择项目"></select><button id="checkView" type="button" class="secondary">检查项目访问</button><button id="checkManage" type="button" class="secondary">检查成员管理权限</button></div><pre id="checkResult"></pre></section>
   </main><footer>教学演示原型 · Sprint 1 权限基线 + Sprint 2 协作增量 · 服务器执行权限校验</footer>
-</div><script src="app.js"></script></body></html>
+</div>
+<dialog id="taskDialog" aria-labelledby="taskDialogTitle">
+  <form id="editTaskForm">
+    <div class="section-heading"><h2 id="taskDialogTitle">编辑任务</h2><button type="button" id="closeTaskDialog" class="secondary">关闭</button></div>
+    <label>任务标题<input name="title" maxlength="100" required></label>
+    <label>关联需求<select name="requirement_id"></select></label>
+    <label>负责人<select name="assignee_user_id"></select></label>
+    <label>截止日<input name="due_date" type="date"></label>
+    <label>状态<select name="status"></select></label>
+    <p id="taskDialogError" class="error" role="alert"></p>
+    <button type="submit">保存修改</button>
+  </form>
+</dialog>
+<script src="app.js"></script></body></html>
