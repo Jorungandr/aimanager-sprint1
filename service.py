@@ -91,6 +91,25 @@ class Store:
         if not user['is_admin']:
             raise AppError('需要管理员权限。', 403)
 
+    def has_global_permission(self, user, permission):
+        """检查不隶属于单个项目的管理权限。
+
+        角色仍通过项目成员关系授予；拥有任一项目中该权限的成员可执行
+        对应的平台级管理操作。管理员保留全部权限，避免初始化和救援流程
+        被角色配置反向锁死。
+        """
+        if user['is_admin']:
+            return True
+        return self._one('''SELECT 1 FROM memberships m JOIN role_permissions rp ON rp.role_id=m.role_id
+            WHERE m.user_id=? AND rp.permission=?''', (user['id'], permission)) is not None
+
+    def capabilities(self, user):
+        return {
+            'can_manage_roles': self.has_global_permission(user, 'roles.manage'),
+            'can_manage_projects': self.has_global_permission(user, 'projects.manage'),
+            'can_manage_members': self.has_global_permission(user, 'members.manage'),
+        }
+
     def create_role(self, name):
         name = str(name).strip()
         if not name or len(name) > 30:

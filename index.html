@@ -8,11 +8,11 @@
   <section id="loginPanel" class="panel" hidden><h2>登录工作空间</h2><form id="loginForm"><label>邮箱<input name="email" type="email" required></label><label>密码<input name="password" type="password" required></label><button>登录</button></form></section>
   <main id="workspace" hidden>
     <section class="summary"><div><span>当前账号</span><strong id="currentUser">—</strong></div><div><span>项目</span><strong id="projectCount">0</strong></div><div><span>角色</span><strong id="roleCount">0</strong></div></section>
-    <section id="adminPanel" class="panel" hidden><h2>管理员配置</h2>
-      <div class="form-grid"><form id="roleForm"><h3>创建角色</h3><label>角色名称<input name="name" maxlength="30" required placeholder="如 项目经理"></label><button>创建角色</button></form>
-      <form id="userForm"><h3>创建演示账号</h3><label>邮箱<input name="email" type="email" required></label><label>密码<input name="password" type="password" minlength="8" required></label><button>创建账号</button></form></div>
-      <h3>角色—权限矩阵</h3><div class="table-wrap"><table id="matrix"><thead><tr><th>角色</th><th>查看项目</th><th>管理成员</th><th>管理项目</th><th>管理角色</th><th>操作</th></tr></thead><tbody></tbody></table></div>
-      <form id="projectForm"><h3>创建项目</h3><label>项目名称<input name="name" maxlength="60" required placeholder="如 蜂鸟演示项目"></label><button>创建项目</button></form>
+    <section id="adminPanel" class="panel" hidden><h2>管理配置</h2>
+      <div class="form-grid"><form id="roleForm" hidden><h3>创建角色</h3><label>角色名称<input name="name" maxlength="30" required placeholder="如 项目经理"></label><button>创建角色</button></form>
+      <form id="userForm" hidden><h3>创建演示账号</h3><label>邮箱<input name="email" type="email" required></label><label>密码<input name="password" type="password" minlength="8" required></label><button>创建账号</button></form></div>
+      <div id="matrixPanel" hidden><h3>角色—权限矩阵</h3><div class="table-wrap"><table id="matrix"><thead><tr><th>角色</th><th>查看项目</th><th>管理成员</th><th>管理项目</th><th>管理角色</th><th>操作</th></tr></thead><tbody></tbody></table></div></div>
+      <form id="projectForm" hidden><h3>创建项目</h3><label>项目名称<input name="name" maxlength="60" required placeholder="如 蜂鸟演示项目"></label><button>创建项目</button></form>
     </section>
     <section class="panel"><h2>项目与成员</h2><div id="projects"></div></section>
     <section id="checkPanel" class="panel"><h2>权限验证</h2><p>选择项目后，向服务器发起“查看成员”和“管理成员”请求，直接观察访问控制结果。</p><div class="inline"><select id="checkProject" aria-label="选择项目"></select><button id="checkView" type="button" class="secondary">检查项目访问</button><button id="checkManage" type="button" class="secondary">检查成员管理权限</button></div><pre id="checkResult"></pre></section>
