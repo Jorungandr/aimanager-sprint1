@@ -182,6 +182,49 @@ class BusinessApiContractTests(unittest.TestCase):
         self.expect(self.viewer, self.other_path + '/tasks/query', 403)
         self.assertEqual(self.snapshot(), before)
 
+    def test_query_rejects_ambiguous_and_invalid_parameters_without_writes(self):
+        before = self.snapshot()
+        queries = (
+            'page=', 'page_size=', 'status=', 'assignee_user_id=', 'requirement_id=',
+            'page=1&page=2', 'keyword=a&keyword=b', 'unknown=1', 'pageSize=2',
+            'page=-1', 'page=1.5', 'page=1000001', 'page_size=0',
+            'assignee_user_id=false', 'assignee_user_id=9223372036854775808',
+            'requirement_id=0', 'unassigned=', 'keyword=' + 'x' * 101,
+        )
+        for query in queries:
+            with self.subTest(query=query):
+                self.expect(self.viewer, self.base_path + '/tasks/query?' + query, 400)
+                self.assertEqual(self.snapshot(), before)
+
+    def test_query_combines_filters_and_empty_optional_search(self):
+        created = self.expect(self.admin, self.base_path + '/tasks', 201, 'POST', {
+            'title': 'Unassigned extra', 'status': 'doing',
+        })
+        before = self.snapshot()
+        result = self.expect(self.viewer, self.base_path + '/tasks/query?keyword=&unassigned=false', 200)
+        self.assertEqual(result['total'], 2)
+        filtered = self.expect(self.viewer, self.base_path + '/tasks/query?' + urlencode({
+            'unassigned': 'true', 'status': 'doing', 'keyword': 'extra', 'page_size': 1,
+        }), 200)
+        self.assertEqual(filtered['items'], [created])
+        empty = self.expect(self.viewer, self.base_path + '/tasks/query?status=done', 200)
+        self.assertEqual((empty['items'], empty['total'], empty['total_pages']), ([], 0, 0))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_failed_task_updates_preserve_entire_database(self):
+        before = self.snapshot()
+        for client, payload, status in (
+            (self.viewer, {'status': 'done', 'version': 1}, 403),
+            (self.admin, {'status': 'done'}, 428),
+            (self.admin, {'status': 'done', 'version': 2}, 409),
+            (self.admin, {'status': 'invalid', 'version': 1}, 400),
+            (self.admin, {'due_date': '2026-02-30', 'version': 1}, 400),
+            (self.admin, {'title': 'Changed', 'assignee_user_id': 999999, 'version': 1}, 400),
+        ):
+            with self.subTest(payload=payload, status=status):
+                self.expect(client, self.task_path, status, 'PUT', payload)
+                self.assertEqual(self.snapshot(), before)
+
     def test_query_contract_uses_filters_and_keeps_legacy_array(self):
         params = urlencode({'assignee_user_id': self.task['assignee_user_id'], 'status': 'todo',
                             'requirement_id': self.requirement['id'], 'keyword': 'Contract',

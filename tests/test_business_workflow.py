@@ -110,6 +110,67 @@ class BusinessWorkflowTests(unittest.TestCase):
             self.project_id, assignee_user_id=self.member['id'])['items'], [reassigned])
         self.assertEqual(self.store.query_tasks(self.project_id, unassigned=True)['total'], 0)
 
+    def reopen(self):
+        self.store.close()
+        self.store = Store(self.path)
+        self.addCleanup(self.store.close)
+
+    def test_archived_task_unlink_and_relink_after_reopen(self):
+        archived = self.store.archive_requirement(self.project_id, self.requirement['id'], 1)
+        edited = self.store.update_task(self.project_id, self.task['id'], {
+            'title': 'Historic task', 'status': 'doing', 'due_date': '2026-11-01', 'version': 1,
+        })
+        self.reopen()
+        self.assertEqual(self.store.get_requirement(self.project_id, archived['id']), archived)
+        self.assertEqual(self.store.get_task(self.project_id, edited['id']), edited)
+        unlinked = self.store.update_task(self.project_id, edited['id'], {
+            'requirement_id': None, 'version': edited['version'],
+        })
+        self.reopen()
+        before = list(self.store.db.iterdump())
+        with self.assertRaises(AppError) as denied:
+            self.store.update_task(self.project_id, unlinked['id'], {
+                'requirement_id': archived['id'], 'version': unlinked['version'],
+            })
+        self.assertEqual(denied.exception.status, 409)
+        self.assertEqual(list(self.store.db.iterdump()), before)
+        restored = self.store.restore_requirement(self.project_id, archived['id'], archived['version'])
+        linked = self.store.update_task(self.project_id, unlinked['id'], {
+            'requirement_id': restored['id'], 'version': unlinked['version'],
+        })
+        self.reopen()
+        self.assertEqual(self.store.get_task(self.project_id, linked['id']), linked)
+        self.assertEqual(self.store.get_requirement(self.project_id, restored['id']), restored)
+
+    def test_member_removal_and_archived_history_survive_reopen(self):
+        archived = self.store.archive_requirement(self.project_id, self.requirement['id'], 1)
+        self.store.remove_member(self.project_id, self.member['id'], actor=self.admin)
+        released = self.store.get_task(self.project_id, self.task['id'])
+        self.reopen()
+        self.assertFalse(self.store.has_permission(self.member, self.project_id, 'project.view'))
+        self.assertIsNone(released['assignee_user_id'])
+        self.assertEqual(released['version'], self.task['version'] + 1)
+        self.assertEqual(self.store.query_tasks(self.project_id, unassigned=True,
+                                               requirement_id=archived['id'])['items'], [released])
+        self.assertEqual(self.store.list_requirements(self.project_id, include_archived=False), [])
+        self.assertEqual(self.store.get_requirement(self.project_id, archived['id']), archived)
+        self.assertEqual(self.store.db.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+        self.assertEqual(self.store.db.execute('PRAGMA foreign_key_check').fetchall(), [])
+
+    def test_rejected_multi_field_update_remains_unchanged_after_reopen(self):
+        before = self.store.get_task(self.project_id, self.task['id'])
+        for changes, status in (
+            ({'title': 'Not persisted', 'due_date': '2026-02-30', 'version': 1}, 400),
+            ({'title': 'Not persisted', 'version': 2}, 409),
+            ({'title': 'Not persisted'}, 428),
+        ):
+            with self.subTest(status=status):
+                with self.assertRaises(AppError) as denied:
+                    self.store.update_task(self.project_id, self.task['id'], changes)
+                self.assertEqual(denied.exception.status, status)
+                self.reopen()
+                self.assertEqual(self.store.get_task(self.project_id, self.task['id']), before)
+
     def test_two_connections_keep_requirement_and_task_versions_independent(self):
         other = Store(self.path)
         self.addCleanup(other.close)
