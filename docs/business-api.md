@@ -1,6 +1,6 @@
 # 后端业务对接说明
 
-维护人：刘皓天。HTTP接口和页面由唐晨飞对接；专项测试可由王昊洋继续维护。本文件约定业务函数，不表示相应HTTP路由和页面入口已经实现。
+维护人：刘皓天。HTTP接口和页面交互由唐晨飞对接，界面体验由殷子淇完善，专项测试可由王昊洋继续维护。需求生命周期和任务分页HTTP接口已经整合到个人集成分支；页面支持需求编辑、归档恢复，任务看板仍使用完整数组在浏览器内筛选，不使用分页结果代替项目总进度。
 
 ## 稳定入口
 
@@ -33,13 +33,30 @@ restored = store.restore_requirement(project_id, requirement_id, archived['versi
 
 ## 权限和错误
 
+已接入的HTTP接口如下，响应直接返回业务对象，不增加`data`包装层：
+
+| 方法与路径 | 请求与返回 |
+| --- | --- |
+| `GET /api/projects/{pid}/requirements` | 返回包含归档历史的需求数组 |
+| `GET /api/projects/{pid}/requirements/{rid}` | 返回单条需求 |
+| `POST /api/projects/{pid}/requirements` | `title`、`description`；201返回新需求，创建人来自登录会话 |
+| `PUT /api/projects/{pid}/requirements/{rid}` | `title`和/或`description`及`version`；200返回更新后的需求 |
+| `POST /api/projects/{pid}/requirements/{rid}/archive` | `{"version": 1}`；200返回归档需求 |
+| `POST /api/projects/{pid}/requirements/{rid}/restore` | `{"version": 2}`；200返回恢复后的需求 |
+| `GET /api/projects/{pid}/tasks` | 保持返回完整任务数组 |
+| `GET /api/projects/{pid}/tasks/query` | 返回分页对象，查询参数见下文 |
+
+需求和任务永久删除请求返回405，不修改数据；归档与恢复只能使用POST。错误响应为`{"error": "具体说明"}`，不返回内部异常详情。
+
 HTTP入口必须先认证，再用`store.require_permission(user, project_id, 'project.view')`检查读取权限；写入用`workitems.manage`。不要从请求体信任`created_by`，应使用认证用户编号。上述需求业务函数负责数据规则，不代替HTTP鉴权；沿用服务器已有的数据库锁。
 
 | 状态码 | 含义及页面处理 |
 | --- | --- |
 | 400 | 字段、类型或长度不合法，展示具体提示 |
+| 401 | 未登录或会话失效，关闭编辑弹窗并回到登录页 |
 | 403 | 无项目权限，由HTTP入口检查 |
 | 404 | 需求不存在或不属于当前项目 |
+| 405 | 不支持的方法或永久删除操作 |
 | 409 | 旧版本冲突、编辑归档需求或新关联归档需求；保留输入，提示刷新或先恢复 |
 | 428 | 缺少读取时的版本号，重新读取后提交 |
 
@@ -55,7 +72,7 @@ HTTP入口必须先认证，再用`store.require_permission(user, project_id, 'p
 
 ## 任务组合筛选与分页
 
-`list_tasks(project_id)`仍返回完整列表，兼容现有HTTP和页面。新增业务函数（HTTP路由待唐晨飞对接）：
+`list_tasks(project_id)`仍返回完整列表，兼容现有HTTP和页面。`GET /api/projects/{pid}/tasks/query`已接入以下业务函数：
 
 ```python
 result = store.query_tasks(project_id, status='todo', unassigned=True, page=1, page_size=20)
@@ -66,6 +83,8 @@ result = store.query_tasks(project_id, status='todo', unassigned=True, page=1, p
 `page`从1开始、最大1000000，`page_size`从1到100。返回`items`、`total`、`page`、`page_size`、`total_pages`；空结果总页数为0，超出末页返回空列表但保留实际总数。不承诺跨两次分页请求的快照一致性；每次调用内总数与列表使用同一读事务。排序沿用看板状态顺序，再按position、id保证相同排序值下的确定性。
 
 HTTP入口仍须检查`project.view`并使用现有数据库锁。任务筛选支持基线US-28和US-24的使用场景；分页属于工程改进，不额外计为已验收用户故事。是否完成故事、速率和燃尽情况须以真实团队过程与DoD为准。
+
+HTTP查询使用相同的snake_case名称：`page`、`page_size`、`assignee_user_id`、`unassigned`、`status`、`requirement_id`、`keyword`。布尔值严格为`true`或`false`；未知或重复参数返回400，空数字、空状态及空布尔值不合法，`keyword=`允许空搜索。不接受旧分支的`pageSize`、`assignee`、`search`；调用方不可自行更换名称。
 
 ## 数据库与验证
 
@@ -80,4 +99,6 @@ HTTP入口仍须检查`project.view`并使用现有数据库锁。任务筛选�
 3. 在副本上检查`PRAGMA integrity_check`结果为`ok`、`PRAGMA foreign_key_check`无结果，并检查项目、需求、任务等关键业务数据。恢复到旧备份会失去备份之后的变更，须由负责人确认。
 4. 用匹配版本的程序打开副本；当前程序会按需要重新升级。确认测试及人工业务检查通过后，才在停服状态下切换数据库路径并启动服务；失败则保留原文件排查。不提供自动覆盖正式库的恢复入口。
 
-运行`python -m unittest discover -s tests -v`，自动包含需求数据库专项21项和任务查询专项9项；全库共57项后端测试。所有测试使用隔离数据库，覆盖归档恢复、跨项目、版本冲突、并发新关联、旧库迁移、查询索引、组合筛选、分页边界和事务兼容性。新增故障测试覆盖迁移中途失败全量回滚、备份路径异常、备份中断清理及重试、原始备份恢复后再次升级；不代表已经对真实生产数据完成恢复验收。
+运行`python -m unittest discover -s tests -v`，默认包含HTTP契约测试；2026-10-18复核共95项后端测试通过，后续以实际输出为准。契约可单独运行`python tests/contracts/business_api_contract.py -v`。所有测试使用隔离数据库，覆盖归档恢复、跨项目、版本冲突、并发新关联、旧库迁移、查询索引、组合筛选、分页边界、重启持久化和失败不写入。故障测试覆盖迁移失败全量回滚、备份异常和恢复后重新升级；不代表已对正式数据完成恢复验收。
+
+`python scripts/check_database.py "数据库副本路径"`执行只读健康检查，退出码0为正常、1为发现异常、2为无法检查。不打开默认正式库、不调用Store、不迁移或修复，不创建不存在的库。检查包括结构版本、必需列、完整性、外键、跨项目需求关联和负责人资格（项目创建者属于合法负责人）；输出不含业务文本，每类定位编号最多100条。交付检查宜停服后在数据库副本上进行。
