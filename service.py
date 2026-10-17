@@ -12,6 +12,7 @@ PERMISSIONS = ('project.view', 'members.manage', 'projects.manage', 'roles.manag
                'workitems.manage')
 TASK_STATUSES = ('backlog', 'todo', 'doing', 'done')
 PROJECT_PERMISSIONS = {'project.view', 'members.manage', 'workitems.manage'}
+SCHEMA_VERSION = 2
 
 
 class AppError(Exception):
@@ -24,6 +25,10 @@ class Store:
     def __init__(self, path):
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
+        # Refuse newer schemas before executing any DDL or data normalization.
+        if self.db.execute('PRAGMA user_version').fetchone()[0] > SCHEMA_VERSION:
+            self.db.close()
+            raise AppError('数据库版本高于当前程序支持范围，请使用更新版本的程序。', 409)
         self.db.execute('PRAGMA foreign_keys=ON')
         self.db.executescript('''
           CREATE TABLE IF NOT EXISTS users (
@@ -93,6 +98,12 @@ class Store:
                     self.db.execute('ALTER TABLE requirements ADD COLUMN archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1))')
         with self.db:
             self.db.execute('CREATE INDEX IF NOT EXISTS idx_requirements_project_archived ON requirements(project_id,archived,id)')
+            self.db.execute('CREATE INDEX IF NOT EXISTS idx_tasks_project_status_position ON tasks(project_id,status,position,id)')
+            self.db.execute('CREATE INDEX IF NOT EXISTS idx_tasks_project_assignee ON tasks(project_id,assignee_user_id)')
+            self.db.execute('CREATE INDEX IF NOT EXISTS idx_memberships_user ON memberships(user_id,project_id,role_id)')
+            # v1: task versions and project owners; v2: requirement versions/archive.
+            # Column checks above also repair legacy schemas that have no version marker.
+            self.db.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
 
     def close(self):
         self.db.close()
@@ -184,12 +195,14 @@ class Store:
             raise AppError('角色名称已存在。') from exc
 
     def list_roles(self):
-        roles = []
-        for row in self.db.execute('SELECT id,name FROM roles ORDER BY id'):
-            permissions = [x['permission'] for x in self.db.execute(
-                'SELECT permission FROM role_permissions WHERE role_id=? ORDER BY permission', (row['id'],))]
-            roles.append({'id': row['id'], 'name': row['name'], 'permissions': permissions})
-        return roles
+        roles = {}
+        # One query regardless of role count; retain empty roles and stable ordering.
+        for row in self.db.execute('''SELECT r.id,r.name,rp.permission FROM roles r
+                LEFT JOIN role_permissions rp ON rp.role_id=r.id ORDER BY r.id,rp.permission'''):
+            role = roles.setdefault(row['id'], {'id': row['id'], 'name': row['name'], 'permissions': []})
+            if row['permission'] is not None:
+                role['permissions'].append(row['permission'])
+        return list(roles.values())
 
     def set_permissions(self, role_id, permissions, actor=None):
         if not self._one('SELECT id FROM roles WHERE id=?', (role_id,)):
@@ -342,10 +355,13 @@ class Store:
         self._project_exists(project_id)
         if not isinstance(include_archived, bool):
             raise AppError('是否包含归档需求必须为布尔值。')
-        return [{**dict(row), 'archived': bool(row['archived'])} for row in self.db.execute('''
+        query = '''
             SELECT id,project_id,title,description,created_by,created_at,version,archived
-            FROM requirements WHERE project_id=? AND (? OR archived=0) ORDER BY id''',
-            (project_id, int(include_archived)))]
+            FROM requirements WHERE project_id=?'''
+        if not include_archived:
+            query += ' AND archived=0'
+        return [{**dict(row), 'archived': bool(row['archived'])}
+                for row in self.db.execute(query + ' ORDER BY id', (project_id,))]
 
     @staticmethod
     def _requirement_description(value):
