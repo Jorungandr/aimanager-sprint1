@@ -53,8 +53,22 @@ HTTP入口必须先认证，再用`store.require_permission(user, project_id, 'p
 - 不自动删除或完成任何任务，不将需求归档视为故事已验收。
 - 任务更新仍须携带任务自己的`version`，不能使用需求版本替代。
 
+## 任务组合筛选与分页
+
+`list_tasks(project_id)`仍返回完整列表，兼容现有HTTP和页面。新增业务函数（HTTP路由待唐晨飞对接）：
+
+```python
+result = store.query_tasks(project_id, status='todo', unassigned=True, page=1, page_size=20)
+```
+
+可选关键字参数：`assignee_user_id`指定负责人；`unassigned=True`仅未指派（不能同时指定负责人）；`status`为现有四种任务状态；`requirement_id`为本项目需求编号；`keyword`搜索任务标题或关联需求标题，最长100字，百分号和下划线按普通文本匹配。未传筛选条件表示全部，组合条件之间为“且”。不存在的负责人返回空结果，跨项目或不存在的需求返回404；历史任务可按归档需求筛选。
+
+`page`从1开始、最大1000000，`page_size`从1到100。返回`items`、`total`、`page`、`page_size`、`total_pages`；空结果总页数为0，超出末页返回空列表但保留实际总数。不承诺跨两次分页请求的快照一致性；每次调用内总数与列表使用同一读事务。排序沿用看板状态顺序，再按position、id保证相同排序值下的确定性。
+
+HTTP入口仍须检查`project.view`并使用现有数据库锁。任务筛选支持基线US-28和US-24的使用场景；分页属于工程改进，不额外计为已验收用户故事。是否完成故事、速率和燃尽情况须以真实团队过程与DoD为准。
+
 ## 数据库与验证
 
 正常数据路径为`data/aimanager.db`；迁移前的备份可能为`.pre-hardening.bak`和`.pre-requirements.bak`。备份含私人数据，不提交到Git。旧数据不清空；`PRAGMA user_version`记录结构版本，新于程序支持范围的数据库拒绝打开。
 
-运行`python -m unittest discover -s tests -v`，自动包含`tests/test_requirements_service.py`的17项专项检查；全库共44项后端测试。所有测试使用临时数据库，覆盖归档恢复、跨项目、版本冲突、并发新关联、旧库迁移、索引查询计划及初始化失败的连接释放。
+运行`python -m unittest discover -s tests -v`，自动包含需求数据库专项17项和任务查询专项9项；全库共53项后端测试。所有测试使用隔离数据库，覆盖归档恢复、跨项目、版本冲突、并发新关联、旧库迁移、查询索引、组合筛选、分页边界和事务兼容性。

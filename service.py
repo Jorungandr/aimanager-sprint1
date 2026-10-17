@@ -382,6 +382,56 @@ class Store:
             ORDER BY CASE t.status WHEN 'backlog' THEN 0 WHEN 'todo' THEN 1
                       WHEN 'doing' THEN 2 ELSE 3 END, t.position, t.id''', (project_id,))]
 
+    def query_tasks(self, project_id, *, assignee_user_id=None, unassigned=False,
+                    status=None, requirement_id=None, keyword='', page=1, page_size=20):
+        """Project-scoped filters and pagination; API callers must check project.view."""
+        project_id = self._integer(project_id, '项目编号')
+        self._project_exists(project_id)
+        page = self._integer(page, '页码')
+        page_size = self._integer(page_size, '每页数量')
+        if page > 1_000_000 or page_size > 100:
+            raise AppError('页码不得超过1000000，每页数量不得超过100。')
+        if not isinstance(unassigned, bool) or (unassigned and assignee_user_id is not None):
+            raise AppError('未指派筛选必须为布尔值，且不能同时指定负责人。')
+        if not isinstance(keyword, str) or len(keyword) > 100:
+            raise AppError('搜索关键词必须为不超过100字的文本。')
+        clauses, params = ['t.project_id=?'], [project_id]
+        if status is not None:
+            if status not in TASK_STATUSES:
+                raise AppError('任务状态不合法。')
+            clauses.append('t.status=?')
+            params.append(status)
+        if unassigned:
+            clauses.append('t.assignee_user_id IS NULL')
+        elif assignee_user_id is not None:
+            clauses.append('t.assignee_user_id=?')
+            params.append(self._integer(assignee_user_id, '负责人编号'))
+        if requirement_id is not None:
+            requirement_id = self._integer(requirement_id, '需求编号')
+            self.get_requirement(project_id, requirement_id)
+            clauses.append('t.requirement_id=?')
+            params.append(requirement_id)
+        if keyword.strip():
+            # instr treats percent/underscore/quotes as literal text, not SQL wildcards.
+            clauses.append("instr(lower(t.title || ' ' || COALESCE(r.title,'')),lower(?))>0")
+            params.append(keyword.strip())
+        source = '''FROM tasks t LEFT JOIN users u ON u.id=t.assignee_user_id
+            LEFT JOIN requirements r ON r.id=t.requirement_id AND r.project_id=t.project_id WHERE '''
+        source += ' AND '.join(clauses)
+        # A savepoint gives count and rows one read snapshot without committing caller work.
+        self.db.execute('SAVEPOINT task_query')
+        try:
+            total = self._one('SELECT COUNT(*) AS n ' + source, params)['n']
+            rows = self.db.execute('''SELECT t.id,t.project_id,t.requirement_id,t.title,t.assignee_user_id,
+                u.email AS assignee_email,t.due_date,t.status,t.position,t.created_by,t.created_at,t.version '''
+                + source + ''' ORDER BY CASE t.status WHEN 'backlog' THEN 0 WHEN 'todo' THEN 1
+                    WHEN 'doing' THEN 2 ELSE 3 END,t.position,t.id LIMIT ? OFFSET ?''',
+                [*params, page_size, (page - 1) * page_size]).fetchall()
+        finally:
+            self.db.execute('RELEASE task_query')
+        return {'items': [dict(row) for row in rows], 'total': total, 'page': page,
+                'page_size': page_size, 'total_pages': (total + page_size - 1) // page_size}
+
     def _validate_assignee(self, project_id, user_id):
         if isinstance(user_id, bool) or isinstance(user_id, float):
             raise AppError('负责人编号必须为整数。')
