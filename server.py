@@ -236,6 +236,35 @@ class Handler(BaseHTTPRequestHandler):
                     data = self.payload()
                     return self.reply(self.store.create_requirement(
                         project_id, data.get('title', ''), data.get('description', ''), user['id']), 201)
+                raise AppError('不支持的请求方法。', 405)
+            match = re.fullmatch(r'/api/projects/(\d+)/requirements/(\d+)', path)
+            if match:
+                project_id, requirement_id = map(int, match.groups())
+                if method == 'GET':
+                    self.store.require_permission(user, project_id, 'project.view')
+                    return self.reply(self.store.get_requirement(project_id, requirement_id))
+                if method == 'PUT':
+                    self.store.require_permission(user, project_id, 'workitems.manage')
+                    return self.reply(self.store.update_requirement(project_id, requirement_id, self.payload()))
+                if method == 'DELETE':
+                    raise AppError('需求不支持永久删除，请使用归档接口。', 405)
+                raise AppError('不支持的请求方法。', 405)
+            match = re.fullmatch(r'/api/projects/(\d+)/requirements/(\d+)/archive', path)
+            if match:
+                project_id, requirement_id = map(int, match.groups())
+                if method == 'POST':
+                    self.store.require_permission(user, project_id, 'workitems.manage')
+                    data = self.payload()
+                    return self.reply(self.store.archive_requirement(project_id, requirement_id, data.get('version')))
+                raise AppError('不支持的请求方法。', 405)
+            match = re.fullmatch(r'/api/projects/(\d+)/requirements/(\d+)/restore', path)
+            if match:
+                project_id, requirement_id = map(int, match.groups())
+                if method == 'POST':
+                    self.store.require_permission(user, project_id, 'workitems.manage')
+                    data = self.payload()
+                    return self.reply(self.store.restore_requirement(project_id, requirement_id, data.get('version')))
+                raise AppError('不支持的请求方法。', 405)
             match = re.fullmatch(r'/api/projects/(\d+)/tasks', path)
             if match:
                 project_id = int(match.group(1))
@@ -249,6 +278,25 @@ class Handler(BaseHTTPRequestHandler):
                         project_id, data.get('title', ''), data.get('requirement_id'),
                         data.get('assignee_user_id'), data.get('due_date'), user['id'],
                         data.get('status', 'backlog')), 201)
+                raise AppError('不支持的请求方法。', 405)
+            match = re.fullmatch(r'/api/projects/(\d+)/tasks/query', path)
+            if match:
+                project_id = int(match.group(1))
+                if method == 'GET':
+                    self.store.require_permission(user, project_id, 'project.view')
+                    from urllib.parse import parse_qs
+                    query_string = urlparse(self.path).query
+                    params = parse_qs(query_string)
+                    page = int(params.get('page', ['1'])[0])
+                    page_size = int(params.get('page_size', ['20'])[0])
+                    status = params.get('status', [None])[0]
+                    assignee = params.get('assignee', [None])[0]
+                    keyword = params.get('keyword', [''])[0]
+                    requirement_id = params.get('requirement_id', [None])[0]
+                    return self.reply(self.store.query_tasks(
+                        project_id, page=page, page_size=page_size, status=status,
+                        assignee_user_id=assignee, keyword=keyword, requirement_id=requirement_id))
+                raise AppError('不支持的请求方法。', 405)
             match = re.fullmatch(r'/api/projects/(\d+)/tasks/(\d+)', path)
             if match and method == 'PUT':
                 project_id, task_id = map(int, match.groups())
