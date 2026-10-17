@@ -43,6 +43,8 @@ class Store:
             project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
             title TEXT NOT NULL,
             description TEXT NOT NULL DEFAULT '',
+            version INTEGER NOT NULL DEFAULT 1,
+            archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1)),
             created_by INTEGER NOT NULL REFERENCES users(id),
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS tasks (
@@ -76,6 +78,21 @@ class Store:
             self.db.execute('''INSERT OR IGNORE INTO role_permissions(role_id,permission)
                 SELECT DISTINCT role_id,'project.view' FROM role_permissions WHERE permission IN
                 ('members.manage','workitems.manage','roles.manage','projects.manage')''')
+        requirement_columns = {row['name'] for row in self.db.execute('PRAGMA table_info(requirements)')}
+        if not {'version', 'archived'}.issubset(requirement_columns):
+            if str(path) != ':memory:' and self._one('SELECT COUNT(*) AS n FROM users')['n']:
+                backup = Path(str(path) + '.pre-requirements.bak')
+                if not backup.exists():
+                    with closing(sqlite3.connect(str(backup))) as snapshot:
+                        self.db.backup(snapshot)
+            with self.db:
+                self.db.execute('BEGIN IMMEDIATE')
+                if 'version' not in requirement_columns:
+                    self.db.execute('ALTER TABLE requirements ADD COLUMN version INTEGER NOT NULL DEFAULT 1')
+                if 'archived' not in requirement_columns:
+                    self.db.execute('ALTER TABLE requirements ADD COLUMN archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1))')
+        with self.db:
+            self.db.execute('CREATE INDEX IF NOT EXISTS idx_requirements_project_archived ON requirements(project_id,archived,id)')
 
     def close(self):
         self.db.close()
@@ -320,20 +337,29 @@ class Store:
         if not minimum <= number <= 2**63 - 1:
             raise AppError(f'{label}超出允许范围。')
         return number
-    def list_requirements(self, project_id):
+    def list_requirements(self, project_id, include_archived=True):
+        """Include history by default; task-creation selectors may request active items only."""
         self._project_exists(project_id)
-        return [dict(row) for row in self.db.execute('''
-            SELECT id,project_id,title,description,created_by,created_at
-            FROM requirements WHERE project_id=? ORDER BY id''', (project_id,))]
+        if not isinstance(include_archived, bool):
+            raise AppError('是否包含归档需求必须为布尔值。')
+        return [{**dict(row), 'archived': bool(row['archived'])} for row in self.db.execute('''
+            SELECT id,project_id,title,description,created_by,created_at,version,archived
+            FROM requirements WHERE project_id=? AND (? OR archived=0) ORDER BY id''',
+            (project_id, int(include_archived)))]
+
+    @staticmethod
+    def _requirement_description(value):
+        if not isinstance(value, str):
+            raise AppError('需求说明必须是文本。')
+        value = value.strip()
+        if len(value) > 500:
+            raise AppError('需求说明不得超过 500 字。')
+        return value
 
     def create_requirement(self, project_id, title, description, created_by):
         self._project_exists(project_id)
         title = self._short_text(title, '需求标题', 80)
-        if not isinstance(description, str):
-            raise AppError('需求说明必须是文本。')
-        description = description.strip()
-        if len(description) > 500:
-            raise AppError('需求说明不得超过 500 字。')
+        description = self._requirement_description(description)
         self.get_user(created_by)
         with self.db:
             cur = self.db.execute('''INSERT INTO requirements(project_id,title,description,created_by)
@@ -341,11 +367,72 @@ class Store:
         return self.get_requirement(project_id, cur.lastrowid)
 
     def get_requirement(self, project_id, requirement_id):
-        row = self._one('''SELECT id,project_id,title,description,created_by,created_at
+        project_id = self._integer(project_id, '项目编号')
+        requirement_id = self._integer(requirement_id, '需求编号')
+        row = self._one('''SELECT id,project_id,title,description,created_by,created_at,version,archived
             FROM requirements WHERE project_id=? AND id=?''', (project_id, requirement_id))
         if not row:
             raise AppError('需求不存在或不属于当前项目。', 404)
-        return dict(row)
+        return {**dict(row), 'archived': bool(row['archived'])}
+
+    @staticmethod
+    def _requirement_version(current, version):
+        if version is None:
+            raise AppError('修改需求须携带读取时的版本号，请刷新后重试。', 428)
+        version = Store._integer(version, '需求版本')
+        if version != current['version']:
+            raise AppError('需求已被其他操作修改，请刷新后重试。', 409)
+        return version
+
+    def _save_requirement(self, current, version, title, description, archived):
+        # Compare-and-swap guards edits and archive operations across connections.
+        with self.db:
+            result = self.db.execute('''UPDATE requirements SET title=?,description=?,archived=?,version=version+1
+                WHERE project_id=? AND id=? AND version=?''',
+                (title, description, int(archived), current['project_id'], current['id'], version))
+            if result.rowcount != 1:
+                raise AppError('需求已被其他操作修改，请刷新后重试。', 409)
+        return self.get_requirement(current['project_id'], current['id'])
+
+    def update_requirement(self, project_id, requirement_id, changes):
+        """Edit title/description with version. API callers must check workitems.manage."""
+        current = self.get_requirement(project_id, requirement_id)
+        if not isinstance(changes, dict) or any(key not in {'title', 'description', 'version'} for key in changes):
+            raise AppError('需求更新字段不合法。')
+        version = self._requirement_version(current, changes.get('version'))
+        if not {'title', 'description'}.intersection(changes):
+            raise AppError('至少提供需求标题或说明。')
+        if current['archived']:
+            raise AppError('归档需求不能编辑，请先恢复。', 409)
+        title = self._short_text(changes.get('title', current['title']), '需求标题', 80)
+        description = self._requirement_description(changes.get('description', current['description']))
+        return self._save_requirement(current, version, title, description, False)
+
+    def _set_requirement_archived(self, project_id, requirement_id, version, archived):
+        current = self.get_requirement(project_id, requirement_id)
+        version = self._requirement_version(current, version)
+        if current['archived'] == archived:
+            return current
+        return self._save_requirement(current, version, current['title'], current['description'], archived)
+
+    def archive_requirement(self, project_id, requirement_id, version=None):
+        """Archive without deleting linked tasks; a matching repeated call is a no-op."""
+        return self._set_requirement_archived(project_id, requirement_id, version, True)
+
+    def restore_requirement(self, project_id, requirement_id, version=None):
+        """Restore an archived requirement, checking the same optimistic version."""
+        return self._set_requirement_archived(project_id, requirement_id, version, False)
+
+    def _requirement_link(self, project_id, requirement_id, previous_id=None):
+        if isinstance(requirement_id, bool) or isinstance(requirement_id, float):
+            raise AppError('需求编号必须为整数。')
+        if requirement_id in (None, '', 0, '0'):
+            return None
+        requirement_id = self._integer(requirement_id, '需求编号')
+        requirement = self.get_requirement(project_id, requirement_id)
+        if requirement['archived'] and requirement_id != previous_id:
+            raise AppError('不能新关联已归档需求，请先恢复需求。', 409)
+        return requirement_id
 
     def list_tasks(self, project_id):
         self._project_exists(project_id)
@@ -376,13 +463,7 @@ class Store:
         title = self._short_text(title, '任务标题', 100)
         if status not in TASK_STATUSES:
             raise AppError('任务状态不合法。')
-        if isinstance(requirement_id, bool) or isinstance(requirement_id, float):
-            raise AppError('需求编号必须为整数。')
-        if requirement_id in (None, '', 0, '0'):
-            requirement_id = None
-        else:
-            requirement_id = self._integer(requirement_id, '需求编号')
-            self.get_requirement(project_id, requirement_id)
+        requirement_id = self._requirement_link(project_id, requirement_id)
         assignee_user_id = self._validate_assignee(project_id, assignee_user_id)
         due_date = self._due_date(due_date)
         self.get_user(created_by)
@@ -391,9 +472,12 @@ class Store:
         with self.db:
             cur = self.db.execute('''INSERT INTO tasks(
                 project_id,requirement_id,title,assignee_user_id,due_date,status,position,created_by)
-                VALUES(?,?,?,?,?,?,?,?)''',
+                SELECT ?,?,?,?,?,?,?,? WHERE ? IS NULL OR EXISTS (
+                    SELECT 1 FROM requirements WHERE id=? AND project_id=? AND archived=0)''',
                 (project_id, requirement_id, title, assignee_user_id, due_date,
-                 status, position, created_by))
+                 status, position, created_by, requirement_id, requirement_id, project_id))
+            if cur.rowcount != 1:
+                raise AppError('关联需求已发生变化，请刷新后重试。', 409)
         return self.get_task(project_id, cur.lastrowid)
 
     def get_task(self, project_id, task_id):
@@ -421,22 +505,17 @@ class Store:
         values['title'] = self._short_text(values['title'], '任务标题', 100)
         if values['status'] not in TASK_STATUSES:
             raise AppError('任务状态不合法。')
-        requirement_id = values['requirement_id']
-        if isinstance(requirement_id, bool) or isinstance(requirement_id, float):
-            raise AppError('需求编号必须为整数。')
-        if requirement_id in (None, '', 0, '0'):
-            requirement_id = None
-        else:
-            requirement_id = self._integer(requirement_id, '需求编号')
-            self.get_requirement(project_id, requirement_id)
+        requirement_id = self._requirement_link(project_id, values['requirement_id'], current['requirement_id'])
         assignee = self._validate_assignee(project_id, values['assignee_user_id'])
         due_date = self._due_date(values['due_date'])
         position = self._integer(values['position'], '任务排序值', minimum=0)
         with self.db:
             result = self.db.execute('''UPDATE tasks SET title=?,requirement_id=?,assignee_user_id=?,
-                due_date=?,status=?,position=?,version=version+1 WHERE project_id=? AND id=? AND version=?''',
+                due_date=?,status=?,position=?,version=version+1 WHERE project_id=? AND id=? AND version=?
+                AND (? IS NULL OR requirement_id=? OR EXISTS (
+                    SELECT 1 FROM requirements WHERE id=? AND project_id=? AND archived=0))''',
                 (values['title'], requirement_id, assignee, due_date, values['status'],
-                 position, project_id, task_id, version))
+                 position, project_id, task_id, version, requirement_id, requirement_id, requirement_id, project_id))
             if result.rowcount != 1:
                 raise AppError('任务已被其他操作修改，请刷新后重新编辑。', 409)
         return self.get_task(project_id, task_id)
