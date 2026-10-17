@@ -39,6 +39,7 @@ python -m unittest discover -s tests -v
 - `service.py`：数据库与业务规则。
 - `index.html`、`app.js`、`styles.css`：浏览器界面。
 - `tests/test_service.py`、`tests/test_http.py`：业务、越权与回归测试；`.github/workflows/tests.yml`：推送与拉取请求触发的全量回归流水线。
+- `docs/stories/sprint2-acceptance.md`：S2-01/S2-02 验收条件、课程故事编号映射、AC—测试—演示追溯表与验收记录栏。
 
 本轮保留Sprint 1及Sprint 2累积提交历史，按团队当前约定验证后直接推送`main`，GitHub Actions在推送后执行回归。直接推送并不代替课程要求的人类差异审查、现场验收及签认；这些证据由团队据实归档。
 
