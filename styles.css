@@ -150,13 +150,14 @@ button.danger:hover { background: var(--danger-soft); }
 /* ---------- 表单 ---------- */
 form { margin: 0; }
 label { display: block; margin: 14px 0; color: var(--ink-soft); font-size: 13.5px; font-weight: 600; }
-label > input, label > select { display: block; width: 100%; margin-top: 6px; }
+label > input, label > select, label > textarea { display: block; width: 100%; margin-top: 6px; }
 input, select, textarea {
     width: 100%; max-width: 100%; min-height: 42px; padding: 9px 11px;
     border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
     background: var(--surface); color: var(--ink); font: inherit; font-size: 14px;
     transition: border-color .15s ease, box-shadow .15s ease;
 }
+textarea { min-height: 0; resize: vertical; }
 input::placeholder { color: #9aacb9; }
 input:hover, select:hover { border-color: #a9bdca; }
 input:focus, select:focus {
@@ -214,6 +215,7 @@ details {
 }
 summary {
     display: flex; align-items: center; gap: 8px; list-style: none;
+    min-height: 40px; /* 折叠标题是主要交互入口，保证点击高度 */
     color: var(--ink-soft); font-size: 14px; font-weight: 600; cursor: pointer;
 }
 summary::-webkit-details-marker { display: none; }
@@ -289,6 +291,14 @@ progress::-moz-progress-bar { border-radius: 999px; background: var(--accent); }
 .task-card strong { display: block; font-size: 13.5px; font-weight: 700; line-height: 1.65; }
 .task-card > span { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; }
 .task-card .overdue { color: var(--danger); font-weight: 600; }
+/* 只读视图：无“管理需求任务”权限时 JS 将卡片标记为 draggable="false"，
+   用角标补足状态区分（叠加在“只读访问”文字提示之上，不单靠颜色） */
+.task-card[draggable="false"]::after {
+    content: "只读"; display: inline-block; margin-top: 8px; padding: 1px 8px;
+    border: 1px solid var(--line-strong); border-radius: 999px;
+    background: var(--surface-soft); color: var(--muted);
+    font-size: 11px; font-weight: 700; letter-spacing: .02em;
+}
 .requirement-tag {
     display: inline-block; margin-top: 8px; padding: 3px 8px;
     border-radius: 999px; background: var(--accent-soft);
@@ -405,15 +415,21 @@ form[data-conflict="true"] [type="submit"] { opacity: .55; cursor: not-allowed; 
     h1 { font-size: 24px; }
     .project > h3 { font-size: 20px; }
     #setupPanel, #loginPanel { margin: 24px auto; padding: 22px; }
-    button { min-height: 44px; }
-    input, select { min-height: 44px; }
-    /* 触控目标统一到 44px：基线的 40/38px 只适用于鼠标 */
-    .workspace-nav button { min-height: 44px; }
-    .task-actions select, .task-actions button { min-height: 44px; }
-    .requirement-actions button { min-height: 44px; padding: 6px 12px; font-size: 13px; }
     .dialog-actions { flex-wrap: wrap; }
     .filter-empty { flex-direction: column; align-items: stretch; }
     .filter-empty button { width: 100%; }
+}
+/* 触控目标统一 44px：窄屏之外，768px 等触屏平板（粗指针）同样覆盖；
+   button.danger 等紧凑按钮的 32px 基线在此一并抬高 */
+@media (max-width: 700px), (pointer: coarse) {
+    button { min-height: 44px; }
+    button.danger { min-height: 44px; }
+    input, select { min-height: 44px; }
+    summary { min-height: 44px; }
+    .workspace-nav button { min-height: 44px; }
+    .task-actions select, .task-actions button { min-height: 44px; }
+    .requirement-actions button { min-height: 44px; padding: 6px 12px; font-size: 13px; }
+    .member-list button { min-height: 44px; padding: 6px 12px; }
 }
 @media (max-width: 420px) {
     .workspace-nav button { padding: 8px 10px; font-size: 13px; }
