@@ -148,6 +148,35 @@ class StoreTests(unittest.TestCase):
         task = self.store.create_task(project['id'], '创建者负责', None, creator['id'], None, creator['id'])
         self.assertEqual(task['assignee_user_id'], creator['id'])
 
+    def test_status_change_appends_to_target_column_without_reordering_edits(self):
+        project = self.store.create_project('Ordering')
+        first = self.store.create_task(project['id'], 'First', None, None, None, self.admin['id'], 'doing')
+        second = self.store.create_task(project['id'], 'Second', None, None, None, self.admin['id'], 'doing')
+        moving = self.store.create_task(project['id'], 'Moving', None, None, None, self.admin['id'], 'todo')
+        moved = self.store.update_task(project['id'], moving['id'], {'status': 'doing', 'version': moving['version']})
+        self.assertEqual(moved['position'], second['position'] + 1)
+        edited = self.store.update_task(project['id'], moved['id'], {'title': 'Renamed', 'version': moved['version']})
+        self.assertEqual(edited['position'], moved['position'])
+        ordered = self.store.query_tasks(project['id'], status='doing')['items']
+        self.assertEqual([task['id'] for task in ordered], [first['id'], second['id'], moving['id']])
+
+    def test_options_do_not_expose_unrelated_project_accounts_or_roles(self):
+        manager = self.store.create_user('manager@example.test', 'MemberPass123')
+        outsider = self.store.create_user('outside@example.test', 'MemberPass123')
+        role = self.store.create_role('Manager')
+        hidden = self.store.create_role('Hidden')
+        self.store.set_permissions(role['id'], ['members.manage'])
+        self.store.set_permissions(hidden['id'], ['project.view'])
+        own = self.store.create_project('Own')
+        other = self.store.create_project('Other')
+        self.store.add_member(own['id'], manager['id'], role['id'])
+        self.store.add_member(other['id'], outsider['id'], hidden['id'])
+        self.assertNotIn(outsider['id'], [user['id'] for user in self.store.user_options(manager)])
+        self.assertNotIn(hidden['id'], [item['id'] for item in self.store.role_options(manager)])
+        self.assertTrue(self.store.has_permission(manager, own['id'], 'members.manage'))
+        self.assertFalse(self.store.has_permission(manager, other['id'], 'members.manage'))
+        self.assertIn(outsider['id'], [user['id'] for user in self.store.user_options(self.admin)])
+
     def test_management_roles_include_view_permission(self):
         role = self.store.create_role('任务管理')
         self.store.set_permissions(role['id'], ['workitems.manage'])

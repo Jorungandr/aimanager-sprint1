@@ -12,7 +12,7 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from server import create_server, SESSION_TTL, LOGIN_WINDOW, LOGIN_LIMIT
+from server import create_server, Handler, SESSION_TTL, SESSION_LIMIT, LOGIN_WINDOW, LOGIN_LIMIT
 
 
 class HttpTests(unittest.TestCase):
@@ -191,7 +191,7 @@ class HttpTests(unittest.TestCase):
 
     def test_slow_request_body_does_not_block_other_clients(self):
         with socket.create_connection(('127.0.0.1', self.server.server_port), timeout=2) as slow:
-            slow.sendall(f'POST /api/login HTTP/1.0\r\nHost: 127.0.0.1:{self.server.server_port}\r\nContent-Length: 100\r\n\r\n'.encode())
+            slow.sendall(f'POST /api/login HTTP/1.0\r\nHost: 127.0.0.1:{self.server.server_port}\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n'.encode())
             request = Request(self.base + '/api/status')
             with self.member.open(request, timeout=2) as response:
                 self.assertEqual(response.status, 200)
@@ -204,6 +204,179 @@ class HttpTests(unittest.TestCase):
         with failure.exception as response:
             self.assertEqual(response.status, 400)
             self.assertIn('error', json.load(response))
+
+    def test_successful_login_clears_failures_and_accounts_are_isolated(self):
+        self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
+        login = lambda email, password: self.req(self.member, '/api/login', 'POST', {'email': email, 'password': password})[0]
+        for _ in range(4):
+            self.assertEqual(login(' ADMIN@example.test ', 'wrong'), 401)
+        self.assertEqual(login('admin@example.test', 'AdminPass123'), 200)
+        self.assertEqual(login('admin@example.test', 'wrong'), 401)
+        self.assertEqual(login('admin@example.test', 'AdminPass123'), 200)
+        self.assertEqual(self.server.login_failures, {})
+        for _ in range(LOGIN_LIMIT):
+            self.assertEqual(login('missing@example.test', 'wrong'), 401)
+        self.assertEqual(login('admin@example.test', 'AdminPass123'), 200)
+        self.assertEqual(login('missing@example.test', 'wrong'), 429)
+
+    def test_login_backoff_and_expired_key_cleanup(self):
+        now = [1000.0]
+        self.server.clock = lambda: now[0]
+        for _ in range(LOGIN_LIMIT):
+            self.assertEqual(self.req(self.member, '/api/login', 'POST', {'email': 'missing@example.test'})[0], 401)
+        for delay in [1, 2, 4]:
+            self.assertEqual(self.req(self.member, '/api/login', 'POST', {'email': 'missing@example.test'})[0], 429)
+            now[0] += delay
+            self.assertEqual(self.req(self.member, '/api/login', 'POST', {'email': 'missing@example.test'})[0], 401)
+        now[0] += LOGIN_WINDOW + 1
+        self.req(self.member, '/api/login', 'POST', {'email': 'another@example.test'})
+        self.assertEqual(set(self.server.login_failures), {('another@example.test', '127.0.0.1')})
+
+    def test_sessions_are_hashed_rotated_and_bounded(self):
+        _, user = self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
+        clients = []
+        with patch.object(self.server.store, 'authenticate', return_value=user):
+            for _ in range(SESSION_LIMIT + 1):
+                client = build_opener(HTTPCookieProcessor(CookieJar()))
+                self.assertEqual(self.req(client, '/api/login', 'POST')[0], 200)
+                clients.append(client)
+            self.assertEqual(self.req(clients[0], '/api/me')[0], 401)
+            for _ in range(400):
+                self.assertEqual(self.req(clients[-1], '/api/login', 'POST')[0], 200)
+        self.assertEqual(len(self.server.sessions), SESSION_LIMIT)
+        self.assertTrue(all(len(key) == 64 for key in self.server.sessions))
+        self.req(clients[-1], '/api/logout', 'POST')
+        self.assertEqual(self.req(clients[-1], '/api/me')[0], 401)
+        self.assertEqual(len(self.server.sessions), SESSION_LIMIT - 1)
+
+    def test_missing_projects_return_404_to_admin(self):
+        self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
+        for resource in ['tasks', 'members', 'requirements', 'tasks/query', 'manage-check']:
+            self.assertEqual(self.req(self.admin, f'/api/projects/999/{resource}')[0], 404)
+
+    def test_restart_invalidates_sessions_without_losing_accounts(self):
+        self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
+        self.server.shutdown()
+        self.thread.join()
+        self.server.server_close()
+        self.server.store.close()
+        self.server = create_server(str(Path(self.tmp.name) / 'api.db'), 0)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f'http://127.0.0.1:{self.server.server_port}'
+        self.assertEqual(self.req(self.admin, '/api/me')[0], 401)
+        self.assertEqual(self.req(self.admin, '/api/status'), (200, {'needs_setup': False}))
+        self.assertEqual(self.req(self.admin, '/api/login', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})[0], 200)
+
+    def test_unassigned_account_has_no_role_options(self):
+        self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
+        self.req(self.admin, '/api/users', 'POST', {'email': 'new@example.test', 'password': 'MemberPass123'})
+        self.req(self.member, '/api/login', 'POST', {'email': 'new@example.test', 'password': 'MemberPass123'})
+        self.assertEqual(self.req(self.member, '/api/role-options')[0], 403)
+        self.assertEqual(self.req(self.member, '/api/projects'), (200, []))
+
+    def test_json_content_type_size_and_host_boundaries(self):
+        for headers, body, expected in [
+            ({'Content-Type': 'text/plain'}, b'{}', 415),
+            ({'Content-Type': 'application/json'}, b' ' * 16_385, 413),
+            ({'Content-Type': 'application/json', 'Host': 'untrusted.example'}, b'{}', 403),
+        ]:
+            request = Request(self.base + '/api/setup', data=body, headers=headers)
+            with self.assertRaises(HTTPError) as failure:
+                self.member.open(request, timeout=3)
+            with failure.exception as response:
+                self.assertEqual(response.status, expected)
+                self.assertIn('error', json.load(response))
+        self.assertTrue(self.server.store.needs_setup())
+
+    def test_overload_returns_json_503_and_retry_after(self):
+        for _ in range(16):
+            self.assertTrue(self.server.slots.acquire(blocking=False))
+        try:
+            with self.assertRaises(HTTPError) as failure:
+                self.member.open(self.base + '/api/status', timeout=2)
+            with failure.exception as response:
+                self.assertEqual(response.status, 503)
+                self.assertEqual(response.headers['Retry-After'], '1')
+                self.assertIn('error', json.load(response))
+        finally:
+            for _ in range(16):
+                self.server.slots.release()
+        self.assertEqual(self.req(self.member, '/api/status')[0], 200)
+
+    def test_slow_response_write_does_not_hold_database_lock(self):
+        entered = threading.Event()
+        release = threading.Event()
+        results = []
+        write_reply = Handler.write_reply
+
+        def slow_write(handler, *args, **kwargs):
+            if not entered.is_set():
+                entered.set()
+                release.wait(5)
+            return write_reply(handler, *args, **kwargs)
+
+        with patch.object(Handler, 'write_reply', slow_write):
+            worker = threading.Thread(target=lambda: results.append(self.req(self.admin, '/api/status')[0]))
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                with self.member.open(self.base + '/api/status', timeout=2) as response:
+                    self.assertEqual(response.status, 200)
+            finally:
+                release.set()
+                worker.join(3)
+        self.assertEqual(results, [200])
+
+    def test_seventeen_connections_receive_overload_response(self):
+        ready = threading.Condition()
+        release = threading.Event()
+        count = [0]
+        connections = []
+        payload = Handler.payload
+
+        def slow_payload(handler):
+            with ready:
+                count[0] += 1
+                ready.notify_all()
+            release.wait(5)
+            return payload(handler)
+
+        with patch.object(Handler, 'payload', slow_payload):
+            try:
+                for _ in range(16):
+                    connection = socket.create_connection(('127.0.0.1', self.server.server_port), timeout=2)
+                    connections.append(connection)
+                    connection.sendall(f'POST /api/login HTTP/1.0\r\nHost: 127.0.0.1:{self.server.server_port}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n'.encode())
+                with ready:
+                    self.assertTrue(ready.wait_for(lambda: count[0] == 16, timeout=3))
+                with self.assertRaises(HTTPError) as failure:
+                    self.member.open(self.base + '/api/status', timeout=2)
+                with failure.exception as response:
+                    self.assertEqual(response.status, 503)
+                    self.assertEqual(response.headers['Retry-After'], '1')
+                    self.assertIn('error', json.load(response))
+            finally:
+                release.set()
+                for connection in connections:
+                    connection.close()
+
+    def test_static_cache_and_unsupported_methods(self):
+        with self.member.open(self.base + '/app.js') as response:
+            self.assertEqual(response.headers['Cache-Control'], 'no-store')
+        with self.member.open(self.base + '/favicon.ico') as response:
+            self.assertEqual(response.status, 204)
+        for method in ['PATCH', 'OPTIONS']:
+            self.assertEqual(self.req(self.member, '/api/status', method)[0], 405)
+
+    def test_corrupt_password_hash_is_not_a_client_validation_error(self):
+        _, user = self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
+        with self.server.store_lock, self.server.store.db:
+            self.server.store.db.execute('UPDATE users SET password_hash=? WHERE id=?', ('broken secret', user['id']))
+        status, body = self.req(self.member, '/api/login', 'POST', {'email': user['email'], 'password': 'AdminPass123'})
+        self.assertEqual(status, 500)
+        self.assertNotIn('secret', body['error'])
+        self.assertFalse(any(self.server.login_failures.values()))
 
     def test_cross_origin_write_is_rejected_before_setup(self):
         request = Request(self.base + '/api/setup', data=b'{}', headers={'Origin': 'https://untrusted.example'})

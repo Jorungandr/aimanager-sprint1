@@ -8,3 +8,9 @@ node_modules/
 *.pre-hardening.bak
 playwright-report/
 test-results/
+.venv/
+.ruff_cache/
+coverage/
+.coverage
+*.db
+*.pre-requirements.bak

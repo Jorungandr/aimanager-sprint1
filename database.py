@@ -49,7 +49,9 @@ def _initialize(db, path):
       CREATE TABLE IF NOT EXISTS role_permissions (
         role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
         permission TEXT NOT NULL, PRIMARY KEY(role_id, permission));
-      CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS projects (
+        id INTEGER PRIMARY KEY, name TEXT NOT NULL,
+        owner_user_id INTEGER REFERENCES users(id));
       CREATE TABLE IF NOT EXISTS memberships (
         project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -59,10 +61,10 @@ def _initialize(db, path):
         project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
         title TEXT NOT NULL,
         description TEXT NOT NULL DEFAULT '',
-        version INTEGER NOT NULL DEFAULT 1,
-        archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1)),
         created_by INTEGER NOT NULL REFERENCES users(id),
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        version INTEGER NOT NULL DEFAULT 1,
+        archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1)));
       CREATE TABLE IF NOT EXISTS tasks (
         id INTEGER PRIMARY KEY,
         project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -74,7 +76,8 @@ def _initialize(db, path):
           CHECK(status IN ('backlog','todo','doing','done')),
         position INTEGER NOT NULL DEFAULT 0,
         created_by INTEGER NOT NULL REFERENCES users(id),
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        version INTEGER NOT NULL DEFAULT 1);
     ''')
     # Re-read columns because the script may have created new tables.
     task_columns = {row['name'] for row in db.execute('PRAGMA table_info(tasks)')}

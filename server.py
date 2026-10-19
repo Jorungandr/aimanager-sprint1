@@ -2,6 +2,7 @@
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from collections import deque
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -17,6 +18,7 @@ ROOT = Path(__file__).resolve().parent
 SESSION_TTL = 2 * 60 * 60
 LOGIN_WINDOW = 60
 LOGIN_LIMIT = 5
+SESSION_LIMIT = 5
 
 
 class LocalServer(ThreadingHTTPServer):
@@ -24,7 +26,17 @@ class LocalServer(ThreadingHTTPServer):
 
     def process_request(self, request, client_address):
         if not self.slots.acquire(blocking=False):
-            self.shutdown_request(request)
+            try:
+                body = b'{"error":"Server busy; retry later."}'
+                request.settimeout(0.2)
+                request.sendall(b'HTTP/1.0 503 Service Unavailable\r\n'
+                                b'Content-Type: application/json\r\n'
+                                b'Retry-After: 1\r\nConnection: close\r\n'
+                                + f'Content-Length: {len(body)}\r\n\r\n'.encode() + body)
+            except OSError:
+                logging.warning('Overload response could not be delivered')
+            finally:
+                self.shutdown_request(request)
             return
         try:
             super().process_request(request, client_address)
@@ -40,7 +52,7 @@ class LocalServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    timeout = 5
+    timeout = 2
 
     def end_headers(self):
         self.send_header('X-Frame-Options', 'DENY')
@@ -56,6 +68,12 @@ class Handler(BaseHTTPRequestHandler):
         return self.server.store
 
     def reply(self, data, status=200, cookie=None):
+        if getattr(self, '_defer_reply', False):
+            self._response = (data, status, cookie)
+            return
+        self.write_reply(data, status, cookie)
+
+    def write_reply(self, data, status=200, cookie=None):
         body = json.dumps(data, ensure_ascii=False).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -63,6 +81,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('X-Content-Type-Options', 'nosniff')
         if cookie is not None:
             self.send_header('Set-Cookie', f'sid={cookie}; HttpOnly; SameSite=Strict; Path=/')
+        if status == 429:
+            self.send_header('Retry-After', str(self._retry_after))
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -93,7 +113,7 @@ class Handler(BaseHTTPRequestHandler):
             cookie.load(self.headers.get('Cookie', ''))
         except Exception:
             return None
-        return cookie['sid'].value if 'sid' in cookie else None
+        return hashlib.sha256(cookie['sid'].value.encode()).hexdigest() if 'sid' in cookie else None
 
     def user(self):
         session = self.server.sessions.get(self.token())
@@ -105,14 +125,23 @@ class Handler(BaseHTTPRequestHandler):
     def new_session(self, user):
         now = self.server.clock()
         self.server.sessions = {token: entry for token, entry in self.server.sessions.items() if entry[1] > now}
+        self.server.sessions.pop(self.token(), None)
+        existing = [key for key, entry in self.server.sessions.items() if entry[0] == user['id']]
+        for key in existing[:max(0, len(existing) - SESSION_LIMIT + 1)]:
+            del self.server.sessions[key]
         token = secrets.token_urlsafe(32)
-        self.server.sessions[token] = (user['id'], now + SESSION_TTL)
+        self.server.sessions[hashlib.sha256(token.encode()).hexdigest()] = (user['id'], now + SESSION_TTL)
         return token
 
     def user_with_capabilities(self, user):
         return {**user, **self.store.capabilities(user)}
 
     def serve_file(self, path):
+        if path == '/favicon.ico':
+            self.send_response(204)
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            return
         allowed = {'/': ('index.html', 'text/html'), '/index.html': ('index.html', 'text/html'),
                    '/app.js': ('app.js', 'text/javascript'), '/styles.css': ('styles.css', 'text/css')}
         if path not in allowed:
@@ -122,6 +151,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-Type', f'{mime}; charset=utf-8')
         self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Cache-Control', 'no-store')
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -137,9 +167,18 @@ class Handler(BaseHTTPRequestHandler):
                 raise AppError('拒绝跨站写入请求。', 403)
             # Do not hold the database lock while reading an untrusted slow body.
             if method in ('POST', 'PUT'):
+                if self.headers.get_content_type() != 'application/json':
+                    raise AppError('请求须使用 application/json。', 415)
                 self._payload = self.payload()
+            if method == 'GET' and not urlparse(self.path).path.startswith('/api/'):
+                return self.serve_file(urlparse(self.path).path)
             with self.server.store_lock:
-                self.dispatch_request(method)
+                self._defer_reply = True
+                try:
+                    self.dispatch_request(method)
+                finally:
+                    self._defer_reply = False
+            self.write_reply(*self._response)
         except AppError as exc:
             self.reply({'error': str(exc)}, exc.status)
         except (ConnectionError, TimeoutError):
@@ -151,8 +190,6 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch_request(self, method):
         path = urlparse(self.path).path
         try:
-            if method == 'GET' and not path.startswith('/api/'):
-                return self.serve_file(path)
             if method == 'GET' and path == '/api/status':
                 return self.reply({'needs_setup': self.store.needs_setup()})
             if method == 'POST' and path == '/api/setup':
@@ -161,17 +198,30 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(user, 201, token)
             if method == 'POST' and path == '/api/login':
                 now = self.server.clock()
-                failures = self.server.login_failures[self.client_address[0]]
-                while failures and failures[0] <= now - LOGIN_WINDOW:
-                    failures.popleft()
-                if len(failures) >= LOGIN_LIMIT:
-                    raise AppError('登录失败次数过多，请一分钟后重试。', 429)
                 data = self.payload()
+                for key, history in list(self.server.login_failures.items()):
+                    while history and history[0] <= now - LOGIN_WINDOW:
+                        history.popleft()
+                    if not history:
+                        del self.server.login_failures[key]
+                email = data.get('email', '')
+                account = email.strip().lower()[:120] if isinstance(email, str) else ''
+                key = (account, self.client_address[0])
+                failures = self.server.login_failures.setdefault(key, deque())
+                if len(failures) >= LOGIN_LIMIT:
+                    delay = min(LOGIN_WINDOW, 2 ** min(len(failures) - LOGIN_LIMIT, 6))
+                    remaining = failures[-1] + delay - now
+                    if remaining > 0:
+                        self._retry_after = max(1, int(remaining + 0.999))
+                        raise AppError('登录失败次数过多，请稍后重试。', 429)
                 try:
                     user = self.store.authenticate(data.get('email', ''), data.get('password', ''))
-                except AppError:
-                    failures.append(now)
+                except AppError as error:
+                    if error.status == 401:
+                        failures.append(now)
                     raise
+                failures.clear()
+                self.server.login_failures.pop(key, None)
                 token = self.new_session(user)
                 return self.reply(user, cookie=token)
             if method == 'POST' and path == '/api/logout':
@@ -192,7 +242,7 @@ class Handler(BaseHTTPRequestHandler):
             if method == 'GET' and path == '/api/user-options':
                 if not self.store.has_global_permission(user, 'members.manage'):
                     raise AppError('需要成员管理权限。', 403)
-                return self.reply(self.store.list_users())
+                return self.reply(self.store.user_options(user))
             if path == '/api/roles':
                 if method == 'GET':
                     if not self.store.has_global_permission(user, 'roles.manage'):
@@ -203,7 +253,7 @@ class Handler(BaseHTTPRequestHandler):
                         raise AppError('需要角色管理权限。', 403)
                     return self.reply(self.store.create_role(self.payload().get('name', '')), 201)
             if method == 'GET' and path == '/api/role-options':
-                return self.reply([{'id': role['id'], 'name': role['name']} for role in self.store.list_roles()])
+                return self.reply(self.store.role_options(user))
             match = re.fullmatch(r'/api/roles/(\d+)/permissions', path)
             if match and method == 'PUT':
                 if not self.store.has_global_permission(user, 'roles.manage'):
@@ -345,14 +395,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self): self.handle_request('POST')
     def do_PUT(self): self.handle_request('PUT')
     def do_DELETE(self): self.handle_request('DELETE')
+    def do_PATCH(self): self.reply({'error': '不支持的请求方法。'}, 405)
+    def do_OPTIONS(self): self.reply({'error': '不支持的请求方法。'}, 405)
 
 
 def create_server(db_path, port=8765):
     from collections import defaultdict
 
     server = LocalServer(('127.0.0.1', port), Handler)
+    # ponytail: serialize this shared SQLite connection; use per-request connections if load grows.
     server.store_lock = threading.RLock()
     server.slots = threading.BoundedSemaphore(16)
+    # ponytail: bounded process-local sessions expire on restart; persist only for restart continuity.
     server.sessions = {}
     server.login_failures = defaultdict(deque)
     server.clock = time.monotonic

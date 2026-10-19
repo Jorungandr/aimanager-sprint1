@@ -128,9 +128,9 @@ async function refresh() {
   $('adminPanel').hidden = !(current.is_admin || canManageRoles || canManageProjects);
   $('roleForm').hidden = !canManageRoles; $('matrixPanel').hidden = !canManageRoles;
   $('projectForm').hidden = !canManageProjects; $('userForm').hidden = !current.is_admin;
-  roleOptions = await api('/api/role-options');
   roles = canManageRoles ? await api('/api/roles') : [];
   projects = await api('/api/projects');
+  roleOptions = projects.length || canManageRoles ? await api('/api/role-options') : [];
   users = current.is_admin ? await api('/api/users') : (current.can_manage_members ? await api('/api/user-options') : []);
   $('roleCount').textContent = roleOptions.length; $('projectCount').textContent = projects.length;
   if (!projects.some(project => String(project.id) === activeProject)) {

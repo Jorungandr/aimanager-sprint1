@@ -63,7 +63,7 @@
 | AC-02-3 | `test_sprint2_work_items_and_sprint1_regression` | 第 6 步 |
 | AC-02-4 | `test_stale_and_missing_versions_do_not_change_task`、浏览器回归 | 第 7 步 |
 | AC-02-5 | 浏览器回归 | 第 7 步 |
-| AC-02-6 | `test_sprint1_*` 系列、`test_granted_management_permissions_apply_on_server`、`test_member_cannot_edit_roles_or_members_and_loses_access_on_removal` | 第 8 步 |
+| AC-02-6 | `test_role_matrix_and_revocation`、`test_granted_management_permissions_apply_on_server`、`test_member_cannot_edit_roles_or_members_and_loses_access_on_removal` | 第 8 步 |
 | 成员移出后的负责人处理 | `test_removed_assignee_is_cleared_only_in_that_project` | 第 8 步 |
 
 自动化命令：`python -m unittest discover -s tests -v`；浏览器回归：`npm run test:browser`。

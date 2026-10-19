@@ -275,6 +275,23 @@ async function main() {
         assert.deepEqual(audit.undersized, [], `以下主要控件小于 44×44：${JSON.stringify(audit.undersized)}`);
     });
 
+    await check('未加入项目的新账号可正常登录并显示空状态', async () => {
+        await expectApi(adminContext, running.baseURL, 'POST', '/api/users', {
+            email: 'unassigned@example.test', password: 'MemberPass123',
+        }, 201);
+        const context = await browser.newContext({ baseURL: running.baseURL });
+        try {
+            const page = await context.newPage();
+            await login(page, 'unassigned@example.test', 'MemberPass123');
+            await page.locator('#projects .empty-state').filter({ hasText: '还没有可访问的项目' }).waitFor();
+            assert.equal(await page.locator('#projectPicker').isDisabled(), true);
+            assert.equal(await page.locator('#notice.error').count(), 0);
+            await expectApi(context, running.baseURL, 'GET', '/api/role-options', undefined, 403);
+        } finally {
+            await context.close();
+        }
+    });
+
     await viewerContext.close();
     await adminContext.close();
 }

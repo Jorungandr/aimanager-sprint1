@@ -66,9 +66,16 @@ class Store:
             raise AppError('邮箱或密码错误。', 401)
         row = self._one('SELECT * FROM users WHERE email=?', (email.strip().lower(),))
         if not row:
+            self._hash(password, b'\0' * 16)
             raise AppError('邮箱或密码错误。', 401)
-        salt, expected = row['password_hash'].split(':')
-        actual = self._hash(password, bytes.fromhex(salt)).split(':')[1]
+        try:
+            salt, expected = row['password_hash'].split(':')
+            salt = bytes.fromhex(salt)
+            if len(salt) != 16 or len(bytes.fromhex(expected)) != 32:
+                raise ValueError('Invalid credential format')
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise AppError('账号凭证异常，请联系管理员。', 500) from exc
+        actual = self._hash(password, salt).split(':')[1]
         if not hmac.compare_digest(actual, expected):
             raise AppError('邮箱或密码错误。', 401)
         return self.get_user(row['id'])
@@ -81,6 +88,30 @@ class Store:
 
     def list_users(self):
         return [dict(row) for row in self.db.execute('SELECT id,email FROM users ORDER BY id')]
+
+    def user_options(self, user):
+        if user['is_admin']:
+            return self.list_users()
+        managed = [project['id'] for project in self.list_projects(user)
+                   if self.has_permission(user, project['id'], 'members.manage')]
+        visible = {user['id']}
+        for project_id in managed:
+            visible.update(member['user_id'] for member in self.list_members(project_id))
+        return [dict(row) for row in self.db.execute('SELECT id,email FROM users ORDER BY id')
+                if row['id'] in visible]
+
+    def role_options(self, user):
+        if self.has_global_permission(user, 'roles.manage'):
+            return [{'id': role['id'], 'name': role['name']} for role in self.list_roles()]
+        projects = self.list_projects(user)
+        if not projects:
+            raise AppError('需要可访问的项目。', 403)
+        visible = set()
+        for project in projects:
+            visible.update(row['role_id'] for row in self.db.execute(
+                'SELECT role_id FROM memberships WHERE project_id=?', (project['id'],)))
+        return [{'id': role['id'], 'name': role['name']} for role in self.list_roles()
+                if role['id'] in visible]
 
     def require_admin(self, user):
         if not user['is_admin']:
@@ -167,6 +198,8 @@ class Store:
             (project_id, user['id'], permission)) is not None
 
     def require_permission(self, user, project_id, permission):
+        if user['is_admin']:
+            self._project_exists(project_id)
         if not self.has_permission(user, project_id, permission):
             raise AppError('无权访问该项目或执行此操作。', 403)
 
@@ -498,6 +531,9 @@ class Store:
         due_date = self._due_date(values['due_date'])
         position = self._integer(values['position'], '任务排序值', minimum=0)
         with self.db:
+            if values['status'] != current['status'] and 'position' not in changes:
+                position = self._one('''SELECT COALESCE(MAX(position),-1)+1 AS n FROM tasks
+                    WHERE project_id=? AND status=?''', (project_id, values['status']))['n']
             result = self.db.execute('''UPDATE tasks SET title=?,requirement_id=?,assignee_user_id=?,
                 due_date=?,status=?,position=?,version=version+1 WHERE project_id=? AND id=? AND version=?
                 AND (? IS NULL OR requirement_id=? OR EXISTS (

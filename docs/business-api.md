@@ -33,6 +33,10 @@ restored = store.restore_requirement(project_id, requirement_id, archived['versi
 
 ## 权限和错误
 
+POST/PUT必须携带`Content-Type: application/json`，否则返回415。响应错误格式仍保持`{"error":"提示文本"}`以兼容已交付客户端，不在本轮改成嵌套对象。过载返回503和`Retry-After`，登录限速返回429和实际退避秒数。平台管理员读取不存在项目返回404；普通账号无项目权限仍返回403。
+
+`/api/user-options`不再向普通项目管理者返回全平台账号，只返回其可管理项目已有成员及创建者。新账号首次加入项目由平台管理员操作。`/api/role-options`对无任何可访问项目的普通用户返回403，其余非角色管理员只能看到可访问项目正在使用的角色；项目成员授权仍使用`/api/projects/{id}/role-options`提供的授权上限裁剪结果。
+
 已接入的HTTP接口如下，响应直接返回业务对象，不增加`data`包装层：
 
 | 方法与路径 | 请求与返回 |

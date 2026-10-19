@@ -160,6 +160,24 @@ class RequirementTests(unittest.TestCase):
 
 
 class DatabaseUpdateTests(unittest.TestCase):
+    def test_fresh_schema_matches_upgraded_legacy_columns(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fresh_path = str(Path(directory) / 'fresh.sqlite')
+            legacy_path = str(Path(directory) / 'legacy.sqlite')
+            with closing(database.open_database(fresh_path)) as fresh, closing(sqlite3.connect(legacy_path)) as legacy:
+                fresh.backup(legacy)
+                expected = {table: [tuple(row) for row in fresh.execute(f'PRAGMA table_info({table})')]
+                            for table in ['projects', 'tasks', 'requirements']}
+                legacy.execute('DROP INDEX idx_requirements_project_archived')
+                for table, column in [('projects', 'owner_user_id'), ('tasks', 'version'),
+                                      ('requirements', 'version'), ('requirements', 'archived')]:
+                    legacy.execute(f'ALTER TABLE {table} DROP COLUMN {column}')
+                legacy.execute('PRAGMA user_version=0')
+                legacy.commit()
+            with closing(database.open_database(legacy_path)) as upgraded:
+                for table, columns in expected.items():
+                    self.assertEqual([tuple(row) for row in upgraded.execute(f'PRAGMA table_info({table})')], columns)
+
     def test_migration_failure_rolls_back_entire_upgrade(self):
         with tempfile.TemporaryDirectory() as directory:
             path = str(Path(directory) / 'legacy.sqlite')
