@@ -10,24 +10,38 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  backend-regression:
+    name: Backend regression
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - name: Run unit and integration tests
         run: python -m unittest discover -s tests -v
-      - name: Set up Node for optional browser regression
-        uses: actions/setup-node@v4
+
+  browser-regression:
+    name: Browser acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
         with:
-          node-version: "22"
+          python-version: "3.11"
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
       - name: Install browser test dependencies
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
-      - name: Run browser regression
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run browser acceptance
         run: npm run test:browser

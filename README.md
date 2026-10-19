@@ -39,7 +39,9 @@ python -m unittest discover -s tests -v
 - `service.py`：数据库与业务规则。
 - `index.html`、`app.js`、`styles.css`：浏览器界面。
 - `tests/test_service.py`、`tests/test_http.py`：业务、越权与回归测试；`.github/workflows/tests.yml`：推送与拉取请求触发的全量回归流水线。
+- `scripts/browser_smoke.mjs`：王昊洋负责的真实 Chromium 自动化验收；`package.json`、`package-lock.json`：固定浏览器测试依赖。
 - `docs/stories/sprint2-acceptance.md`：S2-01/S2-02 验收条件、课程故事编号映射、AC—测试—演示追溯表与验收记录栏。
+- `docs/sprint2/wang-browser-and-ci.md`：王昊洋的自动化验收说明、执行证据和缺陷移交记录。
 
 本轮保留Sprint 1及Sprint 2累积提交历史，按团队当前约定验证后直接推送`main`，GitHub Actions在推送后执行回归。直接推送并不代替课程要求的人类差异审查、现场验收及签认；这些证据由团队据实归档。
 
@@ -65,7 +67,7 @@ npx playwright install chromium
 npm run test:browser
 ```
 
-Python不在PATH时，设置`PYTHON`为Python解释器路径。浏览器脚本验证创建项目与任务、编辑与状态更新、搜索与负责人筛选、旧窗口409冲突及390px布局；CI自动安装浏览器并执行同一脚本。不要将自动测试通过视为非作者签认或现场验收。
+Python不在PATH时，设置`PYTHON`为Python解释器路径。浏览器脚本验证只读成员的查看与写操作阻断、成员移出后的访问回收、无结果筛选的清除操作、任务状态键盘操作，以及390px布局与主要控件尺寸；CI将后端和浏览器回归作为两组独立作业运行。脚本不会跳过失败项或把权限、键盘与移动端断言放宽为警告。不要将自动测试通过视为非作者签认或现场验收。
 
 已有数据库首次启动升级前，会通过SQLite备份生成`data/aimanager.db.pre-hardening.bak`，然后新增任务版本与项目创建者字段；不清空现有数据。备份属于本地私有数据，已从Git忽略。手动恢复前先停止服务并另存当前数据库，再由团队决定是否恢复备份。
 
