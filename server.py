@@ -1,8 +1,9 @@
 """本机教学 HTTP 服务。服务端负责认证与权限判定。"""
-from http.cookies import SimpleCookie
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from collections import deque
 import hashlib
+import hmac
 import json
 import logging
 from pathlib import Path
@@ -107,13 +108,42 @@ class Handler(BaseHTTPRequestHandler):
             raise AppError('请求必须是 JSON 对象。')
         return value
 
-    def token(self):
+    def cookie_value(self, name):
         cookie = SimpleCookie()
         try:
             cookie.load(self.headers.get('Cookie', ''))
-        except Exception:
+        except CookieError:
             return None
-        return hashlib.sha256(cookie['sid'].value.encode()).hexdigest() if 'sid' in cookie else None
+        return cookie[name].value if name in cookie else None
+
+    def token(self):
+        value = self.cookie_value('sid')
+        return hashlib.sha256(value.encode()).hexdigest() if value else None
+
+    def csrf_signature(self, nonce):
+        binding = f'{self.token() or ""}:{nonce}'.encode()
+        return hmac.new(self.server.csrf_secret, binding, hashlib.sha256).hexdigest()
+
+    def valid_csrf(self, token):
+        if not token or not re.fullmatch(r'[0-9a-f]{64}\.[0-9a-f]{64}', token):
+            return False
+        nonce, signature = token.split('.')
+        return hmac.compare_digest(signature, self.csrf_signature(nonce))
+
+    def serve_csrf(self):
+        token = self.cookie_value('csrf')
+        if not self.valid_csrf(token):
+            nonce = secrets.token_hex(32)
+            token = f'{nonce}.{self.csrf_signature(nonce)}'
+        body = json.dumps({'csrf_token': token}).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Set-Cookie', f'csrf={token}; HttpOnly; SameSite=Strict; Path=/')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def user(self):
         session = self.server.sessions.get(self.token())
@@ -163,8 +193,16 @@ class Handler(BaseHTTPRequestHandler):
             if host not in allowed_hosts:
                 raise AppError('仅允许本机地址访问。', 403)
             origin = self.headers.get('Origin')
-            if method != 'GET' and origin is not None and origin != f'http://{host}':
+            path = urlparse(self.path).path
+            if (method != 'GET' or path == '/api/csrf') and origin is not None and origin != f'http://{host}':
                 raise AppError('拒绝跨站写入请求。', 403)
+            if method == 'GET' and path == '/api/csrf':
+                return self.serve_csrf()
+            if method in ('POST', 'PUT', 'DELETE'):
+                token = self.headers.get('X-CSRF-Token', '')
+                cookie = self.cookie_value('csrf') or ''
+                if not self.valid_csrf(token) or not hmac.compare_digest(token.encode(), cookie.encode()):
+                    raise AppError('安全令牌无效，请刷新页面后重试。', 403)
             # Do not hold the database lock while reading an untrusted slow body.
             if method in ('POST', 'PUT'):
                 if self.headers.get_content_type() != 'application/json':
@@ -408,6 +446,7 @@ def create_server(db_path, port=8765):
     server.slots = threading.BoundedSemaphore(16)
     # ponytail: bounded process-local sessions expire on restart; persist only for restart continuity.
     server.sessions = {}
+    server.csrf_secret = secrets.token_bytes(32)
     server.login_failures = defaultdict(deque)
     server.clock = time.monotonic
     server.store = Store(db_path)

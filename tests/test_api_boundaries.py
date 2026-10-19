@@ -45,6 +45,9 @@ class ApiBoundaryTests(unittest.TestCase):
         body = json.dumps(data).encode('utf-8') if data is not None else None
         request = Request(encoded_url, data=body, method=method,
                          headers={'Content-Type': 'application/json'})
+        if method in ('POST', 'PUT', 'DELETE'):
+            with opener.open(self.base + '/api/csrf', timeout=5) as response:
+                request.add_header('X-CSRF-Token', json.load(response)['csrf_token'])
         try:
             with opener.open(request, timeout=5) as response:
                 return response.status, json.loads(response.read().decode('utf-8'))
@@ -388,6 +391,8 @@ class ApiBoundaryTests(unittest.TestCase):
         request = Request(self.base + f'/api/projects/{pid}/requirements',
                          data=b'invalid json', method='POST',
                          headers={'Content-Type': 'application/json'})
+        with self.manager.open(self.base + '/api/csrf', timeout=5) as response:
+            request.add_header('X-CSRF-Token', json.load(response)['csrf_token'])
         try:
             with self.manager.open(request) as response:
                 status = response.status

@@ -61,6 +61,9 @@ class BusinessApiContractTests(unittest.TestCase):
         body = json.dumps(data if data is not None else {}).encode('utf-8') if method in ('POST', 'PUT') else None
         request = Request(self.base_url + path, data=body, method=method,
                           headers={'Content-Type': 'application/json'})
+        if method in ('POST', 'PUT', 'DELETE'):
+            with client.open(self.base_url + '/api/csrf', timeout=5) as response:
+                request.add_header('X-CSRF-Token', json.load(response)['csrf_token'])
         try:
             response = client.open(request, timeout=5)
         except HTTPError as error:

@@ -5,6 +5,7 @@ const permissionLabels = { 'project.view': '查看项目', 'members.manage': '�
 const statusLabels = { backlog: '待梳理', todo: '待办', doing: '进行中', done: '已完成' };
 let activeProject = '', activeView = 'collaboration', projectRequest = 0, editingTask = null, editingRequirement = null, dialogOpener = null;
 const filters = new Map();
+let csrfRequest = null;
 /* 服务端错误统一转成面向用户的提示：不把状态码抛给用户，保留业务原因。 */
 const statusFallback = {
   400: '提交内容不符合要求，请检查后重试。',
@@ -54,26 +55,42 @@ function enterLoggedOut() {
   say('登录已过期，请重新登录。未保存的编辑内容已关闭。', true);
 }
 async function api(path, options = {}) {
-  let response;
-  try {
-    response = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...options });
-  } catch (cause) {
-    throw new Error('无法连接服务器，请检查服务是否启动后重试。', { cause });
-  }
-  let data;
-  try {
-    data = await response.json();
-  } catch (cause) {
-    throw new Error('服务器响应格式异常，请刷新重试。', { cause });
-  }
-  if (!response.ok) {
-    if (response.status === 401 && current) enterLoggedOut();
-    const error = new Error(describeError(response.status, data.error));
-    error.status = response.status;
-    error.reason = data.error || '';
-    throw error;
-  }
-  return data;
+    const headers = { 'Content-Type': 'application/json', ...options.headers };
+    if (['POST', 'PUT', 'DELETE'].includes((options.method || 'GET').toUpperCase())) {
+        if (!csrfRequest) {
+            csrfRequest = api('/api/csrf', { cache: 'no-store' }).then(data => {
+                if (!data.csrf_token) {
+                    throw new Error('服务器未返回安全令牌。');
+                }
+                return data.csrf_token;
+            }).finally(() => {
+                csrfRequest = null;
+            });
+        }
+        headers['X-CSRF-Token'] = await csrfRequest;
+    }
+    let response;
+    try {
+        response = await fetch(path, { ...options, credentials: 'same-origin', headers });
+    } catch (cause) {
+        throw new Error('无法连接服务器，请检查服务是否启动后重试。', { cause });
+    }
+    let data;
+    try {
+        data = await response.json();
+    } catch (cause) {
+        throw new Error('服务器响应格式异常，请刷新重试。', { cause });
+    }
+    if (!response.ok) {
+        if (response.status === 401 && current) {
+            enterLoggedOut();
+        }
+        const error = new Error(describeError(response.status, data.error));
+        error.status = response.status;
+        error.reason = data.error || '';
+        throw error;
+    }
+    return data;
 }
 function say(message, error = false) {
   const notice = $('notice');

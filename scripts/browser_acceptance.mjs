@@ -75,7 +75,13 @@ async function startServer() {
 }
 
 async function api(context, baseURL, method, resource, data) {
-    const response = await context.request.fetch(`${baseURL}${resource}`, { method, data });
+    const headers = {};
+    if (['POST', 'PUT', 'DELETE'].includes(method)) {
+        const bootstrap = await context.request.get(`${baseURL}/api/csrf`);
+        assert.equal(bootstrap.status(), 200);
+        headers['X-CSRF-Token'] = (await bootstrap.json()).csrf_token;
+    }
+    const response = await context.request.fetch(`${baseURL}${resource}`, { method, data, headers });
     let body;
     try { body = await response.json(); } catch (_) { body = null; }
     return { status: response.status(), body };
@@ -170,10 +176,11 @@ async function main() {
         assert.equal(await viewerPage.locator('.task-card[draggable="true"]').count(), 0, '只读成员的任务卡不得可拖动。');
 
         const statuses = await viewerPage.evaluate(async ({ projectId, taskId }) => {
+            const { csrf_token: csrfToken } = await (await fetch('/api/csrf')).json();
             const send = (url, method, body) => fetch(url, {
                 method,
                 credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
                 body: JSON.stringify(body),
             }).then(response => response.status);
             return Promise.all([
@@ -290,6 +297,25 @@ async function main() {
         } finally {
             await context.close();
         }
+    });
+
+    await check('有效登录也必须携带CSRF令牌，跨站写入被拒绝且数据不变', async () => {
+        const resource = `/api/projects/${fixtures.project.id}/requirements`;
+        const before = await expectApi(adminContext, running.baseURL, 'GET', resource, undefined, 200);
+        const missing = await adminContext.request.post(`${running.baseURL}${resource}`, {
+            data: { title: 'Missing CSRF' },
+        });
+        assert.equal(missing.status(), 403);
+        const bootstrap = await adminContext.request.get(`${running.baseURL}/api/csrf`);
+        assert.equal(bootstrap.status(), 200);
+        const token = (await bootstrap.json()).csrf_token;
+        const crossSite = await adminContext.request.post(`${running.baseURL}${resource}`, {
+            data: { title: 'Cross-site mutation' },
+            headers: { 'X-CSRF-Token': token, Origin: 'https://untrusted.example' },
+        });
+        assert.equal(crossSite.status(), 403);
+        const after = await expectApi(adminContext, running.baseURL, 'GET', resource, undefined, 200);
+        assert.deepEqual(after, before);
     });
 
     await viewerContext.close();

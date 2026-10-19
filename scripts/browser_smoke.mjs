@@ -63,10 +63,16 @@ try {
     // A stale editor must not overwrite a concurrent change.
     await page.getByRole('button', { name: '编辑', exact: true }).click();
     const api = page.context().request;
+    const writeApi = async (method, path, options) => {
+        const bootstrap = await api.get(`${url}/api/csrf`);
+        assert.equal(bootstrap.status(), 200);
+        const token = (await bootstrap.json()).csrf_token;
+        return api[method](path, { ...options, headers: { 'X-CSRF-Token': token } });
+    };
     const projects = await (await api.get(`${url}/api/projects`)).json();
     const base = `${url}/api/projects/${projects[0].id}/tasks`;
     const tasks = await (await api.get(base)).json();
-    const response = await api.put(`${base}/${tasks[0].id}`, { data: { title: 'Concurrent change', version: tasks[0].version } });
+    const response = await writeApi('put', `${base}/${tasks[0].id}`, { data: { title: 'Concurrent change', version: tasks[0].version } });
     assert.equal(response.status(), 200);
     await page.getByRole('button', { name: '保存修改', exact: true }).click();
     await page.locator('#taskDialogError').filter({ hasText: '任务已被其他操作修改' }).waitFor();
@@ -99,8 +105,8 @@ try {
     await page.locator('.workitem-forms select[name=requirement_id] option').filter({ hasText: 'Updated lifecycle' }).waitFor({ state: 'attached' });
     // Delayed responses from a closed editor must not alter a newer editor.
     const projectBase = `${url}/api/projects/${projects[0].id}`;
-    assert.equal((await api.post(`${projectBase}/tasks`, { data: { title: 'Another task' } })).status(), 201);
-    assert.equal((await api.post(`${projectBase}/requirements`, { data: { title: 'Another requirement' } })).status(), 201);
+    assert.equal((await writeApi('post', `${projectBase}/tasks`, { data: { title: 'Another task' } })).status(), 201);
+    assert.equal((await writeApi('post', `${projectBase}/requirements`, { data: { title: 'Another requirement' } })).status(), 201);
     for (const kind of ['task', 'requirement']) {
         for (const status of [200, 409]) {
             await page.reload();
@@ -156,7 +162,7 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
     await page.locator('.task-card').first().getByRole('button', { name: '编辑', exact: true }).click();
     assert.equal(await page.locator('#editTaskForm [type=submit]').isEnabled(), true);
-    const loggedOut = await api.post(`${url}/api/logout`, { data: {} });
+    const loggedOut = await writeApi('post', `${url}/api/logout`, { data: {} });
     assert.equal(loggedOut.status(), 200);
     await page.locator('#editTaskForm [type=submit]').click();
     await page.locator('#loginPanel').waitFor({ state: 'visible' });

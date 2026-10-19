@@ -33,12 +33,18 @@ class HttpTests(unittest.TestCase):
         body = json.dumps(data or {}).encode() if method in ('POST', 'PUT') else None
         request = Request(self.base + path, data=body, method=method,
                           headers={'Content-Type': 'application/json'})
+        if method in ('POST', 'PUT', 'DELETE'):
+            request.add_header('X-CSRF-Token', self.csrf_token(opener))
         try:
             with opener.open(request) as response:
                 return response.status, json.load(response)
         except HTTPError as error:
             with error:
                 return error.code, json.load(error)
+
+    def csrf_token(self, opener):
+        with opener.open(self.base + '/api/csrf', timeout=3) as response:
+            return json.load(response)['csrf_token']
 
     def test_member_cannot_edit_roles_or_members_and_loses_access_on_removal(self):
         self.assertEqual(self.req(self.admin, '/api/setup', 'POST',
@@ -191,15 +197,16 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.server.sessions, {})
 
     def test_slow_request_body_does_not_block_other_clients(self):
+        token = self.csrf_token(self.member)
         with socket.create_connection(('127.0.0.1', self.server.server_port), timeout=2) as slow:
-            slow.sendall(f'POST /api/login HTTP/1.0\r\nHost: 127.0.0.1:{self.server.server_port}\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n'.encode())
+            slow.sendall(f'POST /api/login HTTP/1.0\r\nHost: 127.0.0.1:{self.server.server_port}\r\nCookie: csrf={token}\r\nX-CSRF-Token: {token}\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n'.encode())
             request = Request(self.base + '/api/status')
             with self.member.open(request, timeout=2) as response:
                 self.assertEqual(response.status, 200)
 
     def test_raw_malformed_json_is_rejected(self):
         request = Request(self.base + '/api/login', data=b'{broken',
-                          headers={'Content-Type': 'application/json'})
+                          headers={'Content-Type': 'application/json', 'X-CSRF-Token': self.csrf_token(self.member)})
         with self.assertRaises(HTTPError) as failure:
             self.member.open(request, timeout=2)
         with failure.exception as response:
@@ -292,12 +299,14 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.req(self.member, '/api/projects'), (200, []))
 
     def test_json_content_type_size_and_host_boundaries(self):
+        token = self.csrf_token(self.member)
         for headers, body, expected in [
             ({'Content-Type': 'text/plain'}, b'{}', 415),
             ({'Content-Type': 'application/json'}, b' ' * 16_385, 413),
             ({'Content-Type': 'application/json', 'Host': 'untrusted.example'}, b'{}', 403),
         ]:
             request = Request(self.base + '/api/setup', data=body, headers=headers)
+            request.add_header('X-CSRF-Token', token)
             with self.assertRaises(HTTPError) as failure:
                 self.member.open(request, timeout=3)
             with failure.exception as response:
@@ -345,6 +354,7 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(results, [200])
 
     def test_seventeen_connections_receive_overload_response(self):
+        token = self.csrf_token(self.member)
         ready = threading.Condition()
         release = threading.Event()
         count = [0]
@@ -363,7 +373,7 @@ class HttpTests(unittest.TestCase):
                 for _ in range(16):
                     connection = socket.create_connection(('127.0.0.1', self.server.server_port), timeout=2)
                     connections.append(connection)
-                    connection.sendall(f'POST /api/login HTTP/1.0\r\nHost: 127.0.0.1:{self.server.server_port}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n'.encode())
+                    connection.sendall(f'POST /api/login HTTP/1.0\r\nHost: 127.0.0.1:{self.server.server_port}\r\nCookie: csrf={token}\r\nX-CSRF-Token: {token}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n'.encode())
                 with ready:
                     self.assertTrue(ready.wait_for(lambda: count[0] == 16, timeout=3))
                 with self.assertRaises(HTTPError) as failure:
@@ -401,6 +411,113 @@ class HttpTests(unittest.TestCase):
         with failure.exception as response:
             self.assertEqual(response.status, 403)
         self.assertTrue(self.server.store.needs_setup())
+
+    def test_csrf_missing_token_blocks_initialization_before_database_write(self):
+        request = Request(self.base + '/api/setup', data=json.dumps({
+            'email': 'admin@example.test', 'password': 'AdminPass123',
+        }).encode(), headers={'Content-Type': 'application/json'})
+        with self.assertRaises(HTTPError) as failure:
+            self.member.open(request, timeout=3)
+        with failure.exception as response:
+            self.assertEqual(response.status, 403)
+            self.assertIn('error', json.load(response))
+        self.assertTrue(self.server.store.needs_setup())
+
+    def test_csrf_rejects_forged_tokens_and_missing_cookie_even_without_origin(self):
+        token = self.csrf_token(self.member)
+        headers = {'Content-Type': 'application/json'}
+        forged = '00' * 32 + '.' + '11' * 32
+        for extra, opener in [
+            ({'X-CSRF-Token': token}, build_opener()),
+            ({'X-CSRF-Token': forged, 'Cookie': f'csrf={forged}'}, self.member),
+            ({'X-CSRF-Token': token, 'Cookie': f'csrf={forged}'}, self.member),
+            ({'X-CSRF-Token': token, 'Cookie': 'csrf="é"'}, self.member),
+            ({'X-CSRF-Token': 'é'}, self.member),
+            ({'X-CSRF-Token': 'invalid'}, self.member),
+        ]:
+            request = Request(self.base + '/api/setup', data=b'{}', headers={**headers, **extra})
+            with self.assertRaises(HTTPError) as failure:
+                opener.open(request, timeout=3)
+            with failure.exception as response:
+                self.assertEqual(response.status, 403)
+        self.assertTrue(self.server.store.needs_setup())
+
+    def test_csrf_covers_all_mutations_without_origin_and_preserves_database(self):
+        self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
+        _, project = self.req(self.admin, '/api/projects', 'POST', {'name': 'Protected'})
+        prefix = f"/api/projects/{project['id']}"
+        with self.server.store_lock:
+            before = list(self.server.store.db.iterdump())
+            sessions = dict(self.server.sessions)
+        for method, path in [
+            ('POST', '/api/setup'), ('POST', '/api/login'), ('POST', '/api/logout'),
+            ('POST', '/api/users'), ('POST', '/api/roles'), ('POST', '/api/projects'),
+            ('PUT', '/api/roles/1/permissions'), ('POST', prefix + '/members'),
+            ('DELETE', prefix + '/members/1'), ('POST', prefix + '/requirements'),
+            ('PUT', prefix + '/requirements/1'), ('POST', prefix + '/requirements/1/archive'),
+            ('POST', prefix + '/requirements/1/restore'), ('POST', prefix + '/tasks'),
+            ('PUT', prefix + '/tasks/1'),
+        ]:
+            with self.subTest(method=method, path=path):
+                request = Request(self.base + path, method=method, data=b'{}',
+                                  headers={'Content-Type': 'application/json'})
+                with self.assertRaises(HTTPError) as failure:
+                    self.admin.open(request, timeout=3)
+                with failure.exception as response:
+                    self.assertEqual(response.status, 403)
+        with self.server.store_lock:
+            self.assertEqual(list(self.server.store.db.iterdump()), before)
+            self.assertEqual(self.server.sessions, sessions)
+        self.assertEqual(self.req(self.admin, '/api/me')[0], 200)
+
+    def test_csrf_tokens_are_session_bound_and_rotate_after_login_and_logout(self):
+        before_login = self.csrf_token(self.admin)
+        self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
+        stale = Request(self.base + '/api/logout', data=b'{}', headers={
+            'Content-Type': 'application/json', 'X-CSRF-Token': before_login,
+        })
+        with self.assertRaises(HTTPError) as failure:
+            self.admin.open(stale, timeout=3)
+        failure.exception.close()
+        self.assertEqual(failure.exception.code, 403)
+        active = self.csrf_token(self.admin)
+        self.assertNotEqual(active, before_login)
+        transplanted = Request(self.base + '/api/logout', data=b'{}', headers={
+            'Content-Type': 'application/json', 'X-CSRF-Token': active, 'Cookie': f'csrf={active}',
+        })
+        with self.assertRaises(HTTPError) as failure:
+            build_opener().open(transplanted, timeout=3)
+        failure.exception.close()
+        self.assertEqual(failure.exception.code, 403)
+        self.assertEqual(self.req(self.admin, '/api/logout', 'POST')[0], 200)
+        self.assertNotEqual(self.csrf_token(self.admin), active)
+        self.assertEqual(self.req(self.admin, '/api/login', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})[0], 200)
+
+    def test_csrf_bootstrap_is_stable_private_and_rejects_cross_origin(self):
+        with self.member.open(self.base + '/api/csrf', timeout=3) as response:
+            token = json.load(response)['csrf_token']
+            self.assertEqual(response.headers['Cache-Control'], 'no-store')
+            self.assertIn('HttpOnly', response.headers['Set-Cookie'])
+            self.assertIn('SameSite=Strict', response.headers['Set-Cookie'])
+        self.assertEqual(self.csrf_token(self.member), token)
+        request = Request(self.base + '/api/csrf', headers={'Origin': 'https://untrusted.example'})
+        with self.assertRaises(HTTPError) as failure:
+            self.member.open(request, timeout=3)
+        failure.exception.close()
+        self.assertEqual(failure.exception.code, 403)
+
+    def test_csrf_old_server_signature_is_rejected_after_secret_rotation(self):
+        token = self.csrf_token(self.member)
+        self.server.csrf_secret = b'changed signing key for testing'
+        request = Request(self.base + '/api/setup', data=b'{}', headers={
+            'Content-Type': 'application/json', 'X-CSRF-Token': token,
+        })
+        with self.assertRaises(HTTPError) as failure:
+            self.member.open(request, timeout=3)
+        failure.exception.close()
+        self.assertEqual(failure.exception.code, 403)
+        self.assertNotEqual(self.csrf_token(self.member), token)
+        self.assertEqual(self.req(self.member, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})[0], 201)
 
 
 if __name__ == '__main__': unittest.main()
