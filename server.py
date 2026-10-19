@@ -91,18 +91,32 @@ class Handler(BaseHTTPRequestHandler):
     def payload(self):
         if hasattr(self, '_payload'):
             return self._payload
-        try:
-            length = int(self.headers.get('Content-Length', '0'))
-        except ValueError as exc:
-            raise AppError('请求长度不合法。') from exc
-        if length < 0 or length > 16_384:
+        lengths = self.headers.get_all('Content-Length', [])
+        if self.headers.get_all('Transfer-Encoding'):
+            raise AppError('不支持传输编码，请使用 Content-Length。')
+        if len(lengths) > 1 or (lengths and not re.fullmatch(r'[0-9]{1,10}', lengths[0])):
+            raise AppError('请求长度不合法。')
+        length = int(lengths[0]) if lengths else 0
+        if length > 16_384:
             raise AppError('请求内容过大。', 413)
         body = self.rfile.read(length)
         if len(body) != length:
             raise ConnectionAbortedError('Incomplete request body')
+        def unique_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError('Duplicate JSON key')
+                result[key] = value
+            return result
+
+        def reject_constant(value):
+            raise ValueError('Nonstandard JSON constant')
+
         try:
-            value = json.loads(body or b'{}')
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            value = json.loads(body or b'{}', object_pairs_hook=unique_object,
+                               parse_constant=reject_constant)
+        except (ValueError, RecursionError) as exc:
             raise AppError('JSON 格式不合法。') from exc
         if not isinstance(value, dict):
             raise AppError('请求必须是 JSON 对象。')

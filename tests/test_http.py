@@ -213,6 +213,45 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(response.status, 400)
             self.assertIn('error', json.load(response))
 
+    def test_ambiguous_and_nonstandard_json_is_rejected_without_writes(self):
+        token = self.csrf_token(self.member)
+        for body in [
+            b'{"email":"first","email":"second"}',
+            b'{"nested":{"name":1,"name":2}}',
+            b'{"value":NaN}', b'{"value":Infinity}', b'{"value":-Infinity}',
+            b'{"nested":' + b'[' * 2000 + b'0' + b']' * 2000 + b'}',
+        ]:
+            with self.subTest(body=body[:80]):
+                request = Request(self.base + '/api/setup', data=body, headers={
+                    'Content-Type': 'application/json', 'X-CSRF-Token': token,
+                })
+                with self.assertRaises(HTTPError) as failure:
+                    self.member.open(request, timeout=3)
+                with failure.exception as response:
+                    self.assertEqual(response.status, 400)
+                    self.assertIn('error', json.load(response))
+                self.assertTrue(self.server.store.needs_setup())
+
+    def test_ambiguous_http_framing_is_rejected_before_body_read(self):
+        token = self.csrf_token(self.member)
+        for framing in [
+            'Content-Length: 2\r\nContent-Length: 2',
+            'Content-Length: 2\r\nContent-Length: 100',
+            'Content-Length: +2', 'Content-Length: 2, 2',
+            'Transfer-Encoding: chunked',
+            'Transfer-Encoding: chunked\r\nContent-Length: 2',
+        ]:
+            with self.subTest(framing=framing):
+                with socket.create_connection(('127.0.0.1', self.server.server_port), timeout=3) as client:
+                    client.sendall((f'POST /api/setup HTTP/1.0\r\n'
+                                    f'Host: 127.0.0.1:{self.server.server_port}\r\n'
+                                    f'Cookie: csrf={token}\r\nX-CSRF-Token: {token}\r\n'
+                                    f'Content-Type: application/json\r\n{framing}\r\n\r\n').encode())
+                    response = client.makefile('rb')
+                    with response:
+                        self.assertIn(b' 400 ', response.readline())
+                self.assertTrue(self.server.store.needs_setup())
+
     def test_successful_login_clears_failures_and_accounts_are_isolated(self):
         self.server.clock = lambda: 1000.0
         self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
