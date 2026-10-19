@@ -12,6 +12,8 @@ PERMISSIONS = ('project.view', 'members.manage', 'projects.manage', 'roles.manag
                'workitems.manage')
 TASK_STATUSES = ('backlog', 'todo', 'doing', 'done')
 PROJECT_PERMISSIONS = {'project.view', 'members.manage', 'workitems.manage'}
+PASSWORD_ITERATIONS = 600_000
+MAX_PASSWORD_ITERATIONS = 2_000_000
 
 
 class AppError(Exception):
@@ -37,10 +39,10 @@ class Store:
         return self._one('SELECT COUNT(*) AS n FROM users')['n'] == 0
 
     @staticmethod
-    def _hash(password, salt=None):
+    def _hash(password, salt=None, iterations=PASSWORD_ITERATIONS):
         salt = salt or os.urandom(16)
-        digest = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 150_000)
-        return f'{salt.hex()}:{digest.hex()}'
+        digest = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, iterations)
+        return f'pbkdf2_sha256${iterations}${salt.hex()}${digest.hex()}'
 
     def create_user(self, email, password, admin=False):
         email = self._short_text(email, '邮箱', 120).lower()
@@ -69,15 +71,34 @@ class Store:
             self._hash(password, b'\0' * 16)
             raise AppError('邮箱或密码错误。', 401)
         try:
-            salt, expected = row['password_hash'].split(':')
-            salt = bytes.fromhex(salt)
-            if len(salt) != 16 or len(bytes.fromhex(expected)) != 32:
+            stored = row['password_hash']
+            legacy = ':' in stored and '$' not in stored
+            if legacy:
+                salt, expected = stored.split(':')
+                iterations = 150_000
+            else:
+                algorithm, count, salt, expected = stored.split('$')
+                if algorithm != 'pbkdf2_sha256' or not re.fullmatch(r'[1-9][0-9]{0,6}', count):
+                    raise ValueError('Unsupported credential parameters')
+                iterations = int(count)
+            # Bound stored work factors before hashing, including malformed database values.
+            if not 100_000 <= iterations <= MAX_PASSWORD_ITERATIONS:
+                raise ValueError('Unsupported credential work factor')
+            if not re.fullmatch(r'[0-9a-f]{32}', salt) or not re.fullmatch(r'[0-9a-f]{64}', expected):
                 raise ValueError('Invalid credential format')
+            salt = bytes.fromhex(salt)
         except (ValueError, TypeError, AttributeError) as exc:
             raise AppError('账号凭证异常，请联系管理员。', 500) from exc
-        actual = self._hash(password, salt).split(':')[1]
+        actual = self._hash(password, salt, iterations).rsplit('$', 1)[1]
         if not hmac.compare_digest(actual, expected):
             raise AppError('邮箱或密码错误。', 401)
+        if legacy or iterations < PASSWORD_ITERATIONS:
+            upgraded = self._hash(password)
+            with self.db:
+                result = self.db.execute('UPDATE users SET password_hash=? WHERE id=? AND password_hash=?',
+                                         (upgraded, row['id'], stored))
+                if result.rowcount != 1:
+                    raise AppError('账号凭证已变更，请重新登录。', 401)
         return self.get_user(row['id'])
 
     def get_user(self, user_id):

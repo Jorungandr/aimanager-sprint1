@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from server import create_server, Handler, SESSION_TTL, SESSION_LIMIT, LOGIN_WINDOW, LOGIN_LIMIT
+from service import AppError
 
 
 class HttpTests(unittest.TestCase):
@@ -206,6 +207,7 @@ class HttpTests(unittest.TestCase):
             self.assertIn('error', json.load(response))
 
     def test_successful_login_clears_failures_and_accounts_are_isolated(self):
+        self.server.clock = lambda: 1000.0
         self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
         login = lambda email, password: self.req(self.member, '/api/login', 'POST', {'email': email, 'password': password})[0]
         for _ in range(4):
@@ -231,6 +233,20 @@ class HttpTests(unittest.TestCase):
         now[0] += LOGIN_WINDOW + 1
         self.req(self.member, '/api/login', 'POST', {'email': 'another@example.test'})
         self.assertEqual(set(self.server.login_failures), {('another@example.test', '127.0.0.1')})
+
+    def test_login_backoff_starts_when_authentication_finishes(self):
+        now = [1000.0]
+        self.server.clock = lambda: now[0]
+
+        def slow_failure(*args):
+            now[0] += 2
+            raise AppError('Invalid credentials', 401)
+
+        with patch.object(self.server.store, 'authenticate', side_effect=slow_failure):
+            for _ in range(LOGIN_LIMIT):
+                self.assertEqual(self.req(self.member, '/api/login', 'POST', {'email': 'missing@example.test'})[0], 401)
+            self.assertEqual(self.req(self.member, '/api/login', 'POST', {'email': 'missing@example.test'})[0], 429)
+        self.assertEqual(self.server.login_failures[('missing@example.test', '127.0.0.1')][-1], now[0])
 
     def test_sessions_are_hashed_rotated_and_bounded(self):
         _, user = self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})

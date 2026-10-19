@@ -218,7 +218,7 @@ class Handler(BaseHTTPRequestHandler):
                     user = self.store.authenticate(data.get('email', ''), data.get('password', ''))
                 except AppError as error:
                     if error.status == 401:
-                        failures.append(now)
+                        failures.append(self.server.clock())
                     raise
                 failures.clear()
                 self.server.login_failures.pop(key, None)

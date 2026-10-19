@@ -4,10 +4,12 @@ from pathlib import Path
 import tempfile
 import unittest
 import sqlite3
+import hashlib
 from contextlib import closing
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from service import AppError, Store
+from service import AppError, Store, PASSWORD_ITERATIONS, MAX_PASSWORD_ITERATIONS
 
 
 class StoreTests(unittest.TestCase):
@@ -24,6 +26,83 @@ class StoreTests(unittest.TestCase):
         self.assertNotIn('AdminPass123', row['password_hash'])
         self.assertEqual(self.store.authenticate('admin@example.test', 'AdminPass123')['id'], self.admin['id'])
         with self.assertRaises(AppError): self.store.authenticate('admin@example.test', 'wrong-pass')
+
+    def test_new_password_hash_records_algorithm_iterations_and_random_salt(self):
+        first = self.store.db.execute('SELECT password_hash FROM users').fetchone()[0]
+        self.store.create_user('same@example.test', 'AdminPass123')
+        second = self.store.db.execute('SELECT password_hash FROM users ORDER BY id DESC').fetchone()[0]
+        algorithm, iterations, salt, digest = first.split('$')
+        self.assertEqual((algorithm, int(iterations)), ('pbkdf2_sha256', PASSWORD_ITERATIONS))
+        self.assertEqual((len(salt), len(digest)), (32, 64))
+        self.assertNotEqual(first, second)
+
+    def test_legacy_password_upgrades_only_after_success_and_survives_reopen(self):
+        salt = bytes(range(16))
+        legacy = f"{salt.hex()}:{hashlib.pbkdf2_hmac('sha256', b'AdminPass123', salt, 150_000).hex()}"
+        with self.store.db:
+            self.store.db.execute('UPDATE users SET password_hash=?', (legacy,))
+        with self.assertRaises(AppError) as denied:
+            self.store.authenticate('admin@example.test', 'wrong-pass')
+        self.assertEqual(denied.exception.status, 401)
+        self.assertEqual(self.store.db.execute('SELECT password_hash FROM users').fetchone()[0], legacy)
+        self.assertEqual(self.store.authenticate('admin@example.test', 'AdminPass123'), self.admin)
+        upgraded = self.store.db.execute('SELECT password_hash FROM users').fetchone()[0]
+        self.assertTrue(upgraded.startswith(f'pbkdf2_sha256${PASSWORD_ITERATIONS}$'))
+        self.assertNotEqual(upgraded.split('$')[2], salt.hex())
+        self.store.close()
+        self.store = Store(str(Path(self.tmp.name) / 'test.db'))
+        self.assertEqual(self.store.authenticate('admin@example.test', 'AdminPass123'), self.admin)
+        self.assertEqual(self.store.db.execute('SELECT password_hash FROM users').fetchone()[0], upgraded)
+
+    def test_versioned_password_upgrades_lower_cost_without_downgrading_stronger_hash(self):
+        for iterations in [150_000, PASSWORD_ITERATIONS + 100_000]:
+            stored = Store._hash('AdminPass123', iterations=iterations)
+            with self.store.db:
+                self.store.db.execute('UPDATE users SET password_hash=?', (stored,))
+            self.store.authenticate('admin@example.test', 'AdminPass123')
+            after = self.store.db.execute('SELECT password_hash FROM users').fetchone()[0]
+            self.assertEqual(int(after.split('$')[1]), max(iterations, PASSWORD_ITERATIONS))
+            if iterations > PASSWORD_ITERATIONS:
+                self.assertEqual(after, stored)
+
+    def test_invalid_stored_hash_is_rejected_before_expensive_work(self):
+        salt, digest = '00' * 16, '11' * 32
+        invalid = ['broken', 'aa:bb', f'other$600000${salt}${digest}']
+        invalid.extend(f'pbkdf2_sha256${count}${salt}${digest}' for count in
+                       ['0', '-1', '0600000', '9999999999999999999', str(MAX_PASSWORD_ITERATIONS + 1)])
+        for stored in invalid:
+            with self.subTest(stored=stored):
+                with self.store.db:
+                    self.store.db.execute('UPDATE users SET password_hash=?', (stored,))
+                with patch('service.hashlib.pbkdf2_hmac') as derive, self.assertRaises(AppError) as failure:
+                    self.store.authenticate('admin@example.test', 'AdminPass123')
+                derive.assert_not_called()
+                self.assertEqual(failure.exception.status, 500)
+                self.assertEqual(self.store.db.execute('SELECT password_hash FROM users').fetchone()[0], stored)
+
+    def test_unknown_account_performs_current_cost_dummy_hash(self):
+        with patch.object(self.store, '_hash', wraps=Store._hash) as derive:
+            with self.assertRaises(AppError) as failure:
+                self.store.authenticate('missing@example.test', 'AdminPass123')
+        self.assertEqual(failure.exception.status, 401)
+        derive.assert_called_once_with('AdminPass123', b'\0' * 16)
+
+    def test_password_upgrade_does_not_overwrite_concurrent_credential_change(self):
+        legacy = Store._hash('AdminPass123', iterations=150_000)
+        replacement = Store._hash('ReplacementPass123')
+        with self.store.db:
+            self.store.db.execute('UPDATE users SET password_hash=?', (legacy,))
+
+        def change_during_upgrade(password, salt=None, iterations=PASSWORD_ITERATIONS):
+            if salt is None:
+                with self.store.db:
+                    self.store.db.execute('UPDATE users SET password_hash=?', (replacement,))
+            return Store._hash(password, salt, iterations)
+
+        with patch.object(self.store, '_hash', side_effect=change_during_upgrade), self.assertRaises(AppError) as failure:
+            self.store.authenticate('admin@example.test', 'AdminPass123')
+        self.assertEqual(failure.exception.status, 401)
+        self.assertEqual(self.store.db.execute('SELECT password_hash FROM users').fetchone()[0], replacement)
 
     def test_role_matrix_and_revocation(self):
         user = self.store.create_user('member@example.test', 'MemberPass123')
