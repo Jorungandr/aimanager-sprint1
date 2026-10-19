@@ -97,6 +97,61 @@ try {
     await requirementRow.getByRole('button', { name: '恢复', exact: true }).click();
     await page.getByText('新建需求或任务', { exact: true }).click();
     await page.locator('.workitem-forms select[name=requirement_id] option').filter({ hasText: 'Updated lifecycle' }).waitFor({ state: 'attached' });
+    // Delayed responses from a closed editor must not alter a newer editor.
+    const projectBase = `${url}/api/projects/${projects[0].id}`;
+    assert.equal((await api.post(`${projectBase}/tasks`, { data: { title: 'Another task' } })).status(), 201);
+    assert.equal((await api.post(`${projectBase}/requirements`, { data: { title: 'Another requirement' } })).status(), 201);
+    for (const kind of ['task', 'requirement']) {
+        for (const status of [200, 409]) {
+            await page.reload();
+            await page.locator('.task-card').first().waitFor();
+            await page.evaluate(() => {
+                document.querySelectorAll('#projects details').forEach(details => {
+                    details.open = true;
+                });
+            });
+            const rows = page.locator(kind === 'task' ? '.task-card' : '.requirements li');
+            const form = page.locator(kind === 'task' ? '#editTaskForm' : '#editRequirementForm');
+            const dialog = page.locator(kind === 'task' ? '#taskDialog' : '#requirementDialog');
+            const errorBox = page.locator(kind === 'task' ? '#taskDialogError' : '#requirementDialogError');
+            const pattern = `**/api/projects/*/${kind}s/*`;
+            let receive;
+            const intercepted = new Promise(resolve => {
+                receive = resolve;
+            });
+            let requests = 0;
+            await page.route(pattern, route => {
+                if (route.request().method() !== 'PUT') {
+                    return route.continue();
+                }
+                requests += 1;
+                receive(route);
+            });
+            await rows.first().getByRole('button', { name: '编辑', exact: true }).click();
+            await form.locator('[type=submit]').click();
+            const pending = await intercepted;
+            await form.evaluate(element => {
+                element.requestSubmit();
+            });
+            await page.keyboard.press('Escape');
+            await dialog.waitFor({ state: 'hidden' });
+            await rows.last().getByRole('button', { name: '编辑', exact: true }).click();
+            await form.locator('[name=title]').fill('New editor unsaved input');
+            const responseReady = page.waitForResponse(response => response.request().method() === 'PUT');
+            await pending.fulfill({ status, contentType: 'application/json', body: JSON.stringify(status === 200 ? {} : { error: 'Delayed conflict' }) });
+            await (await responseReady).finished();
+            await page.evaluate(() => new Promise(resolve => {
+                requestAnimationFrame(() => requestAnimationFrame(resolve));
+            }));
+            assert.equal(requests, 1, 'Repeated submit must not issue another request');
+            assert.equal(await dialog.isVisible(), true, 'Old response must not close the new editor');
+            assert.equal(await form.locator('[name=title]').inputValue(), 'New editor unsaved input');
+            assert.equal(await form.locator('[type=submit]').isEnabled(), true);
+            assert.equal(await errorBox.textContent(), '');
+            await page.unroute(pattern);
+            await page.keyboard.press('Escape');
+        }
+    }
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
     await page.locator('.task-card').first().getByRole('button', { name: '编辑', exact: true }).click();

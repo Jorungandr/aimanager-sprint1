@@ -544,11 +544,26 @@ function openDialog(id, focusName) {
 }
 function closeDialog(id) {
   const dialog = $(id);
-  if (dialog.open) dialog.close();
+  if (id === 'taskDialog') {
+    editingTask = null;
+  } else if (id === 'requirementDialog') {
+    editingRequirement = null;
+  }
+  if (dialog.open) {
+    dialog.close();
+  }
 }
 /* Esc 与按钮关闭都经由此处归还焦点，键盘用户不会丢位置 */
 for (const id of ['taskDialog', 'requirementDialog']) {
   $(id).addEventListener('close', () => {
+    if ($(id).open) {
+      return;
+    }
+    if (id === 'taskDialog') {
+      editingTask = null;
+    } else {
+      editingRequirement = null;
+    }
     if (dialogOpener && dialogOpener.isConnected) dialogOpener.focus();
     dialogOpener = null;
   });
@@ -604,20 +619,30 @@ $('editRequirementForm').addEventListener('submit', async event => {
   event.preventDefault();
   if (!editingRequirement) return;
   const form = event.currentTarget;
-  if (form.dataset.conflict === 'true') return;
   const button = form.querySelector('[type="submit"]');
+  if (form.dataset.conflict === 'true' || button.disabled) {
+    return;
+  }
+  const context = editingRequirement;
   button.disabled = true;
   try {
     const data = formData(form);
-    data.version = editingRequirement.requirement.version;
-    await api(`/api/projects/${editingRequirement.project.id}/requirements/${editingRequirement.requirement.id}`, { method: 'PUT', body: JSON.stringify(data) });
+    data.version = context.requirement.version;
+    await api(`/api/projects/${context.project.id}/requirements/${context.requirement.id}`, { method: 'PUT', body: JSON.stringify(data) });
+    if (editingRequirement !== context) {
+      return;
+    }
     closeDialog('requirementDialog');
     say('需求修改已保存');
     await renderProjects();
   } catch (error) {
-    showDialogProblem(form, 'requirementDialogError', error);
+    if (editingRequirement === context) {
+      showDialogProblem(form, 'requirementDialogError', error);
+    }
   } finally {
-    button.disabled = form.dataset.conflict === 'true';
+    if (editingRequirement === context) {
+      button.disabled = form.dataset.conflict === 'true';
+    }
   }
 });
 function openTaskEditor(project, task, members, requirements) {
@@ -642,18 +667,28 @@ $('editTaskForm').addEventListener('submit', async event => {
   event.preventDefault();
   if (!editingTask) return;
   const form = event.currentTarget;
-  if (form.dataset.conflict === 'true') return;
   const button = form.querySelector('[type="submit"]');
+  if (form.dataset.conflict === 'true' || button.disabled) {
+    return;
+  }
+  const context = editingTask;
   button.disabled = true;
   try {
-    await api(`/api/projects/${editingTask.project.id}/tasks/${editingTask.task.id}`, { method: 'PUT', body: JSON.stringify({ ...formData(form), version: editingTask.task.version }) });
+    await api(`/api/projects/${context.project.id}/tasks/${context.task.id}`, { method: 'PUT', body: JSON.stringify({ ...formData(form), version: context.task.version }) });
+    if (editingTask !== context) {
+      return;
+    }
     closeDialog('taskDialog');
     say('任务修改已保存');
     await renderProjects();
   } catch (error) {
-    showDialogProblem(form, 'taskDialogError', error);
+    if (editingTask === context) {
+      showDialogProblem(form, 'taskDialogError', error);
+    }
   } finally {
-    button.disabled = form.dataset.conflict === 'true';
+    if (editingTask === context) {
+      button.disabled = form.dataset.conflict === 'true';
+    }
   }
 });
 document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => setView(button.dataset.view)));
