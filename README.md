@@ -41,6 +41,7 @@ python -m unittest discover -s tests -v
 - `index.html`、`app.js`、`styles.css`：浏览器界面。
 - `tests/`：业务、HTTP边界、接口契约、数据库迁移与健康检查测试；`.github/workflows/tests.yml`：推送与拉取请求触发的全量回归流水线。
 - `scripts/check_database.py`：只读数据库健康检查；`docs/business-api.md`：实际接口与业务约定。
+- `scripts/browser_smoke.mjs`与`scripts/browser_acceptance.mjs`：原有业务流程回归和王昊洋新增的权限、筛选、键盘及移动端验收；`npm run test:browser`依次执行两者。
 
 本轮保留Sprint 1及Sprint 2累积提交历史。成员成果先在功能分支开发，再集中整合到`feature/liuhaotian-business`并执行回归；团队完成非作者审查与现场验收后，再确认合入`main`。当前集成成果尚未整体合入主分支。CI通过不代替课程要求的人工验收及签认，证据由团队据实归档。
 
