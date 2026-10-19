@@ -14,7 +14,7 @@ import threading
 import unittest
 from urllib.error import HTTPError
 from urllib.parse import urlencode
-from urllib.request import HTTPCookieProcessor, Request, build_opener
+from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from server import create_server
@@ -48,9 +48,9 @@ class BusinessApiContractTests(unittest.TestCase):
         self.addCleanup(thread.join)
         self.addCleanup(self.server.shutdown)
         self.base_url = f'http://127.0.0.1:{self.server.server_port}'
-        self.admin = build_opener(HTTPCookieProcessor(CookieJar()))
-        self.viewer = build_opener(HTTPCookieProcessor(CookieJar()))
-        self.anonymous = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.admin = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
+        self.viewer = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
+        self.anonymous = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
         for client, email, password in (
             (self.admin, 'owner@example.test', 'OwnerPass123'),
             (self.viewer, 'viewer@example.test', 'ViewerPass123'),

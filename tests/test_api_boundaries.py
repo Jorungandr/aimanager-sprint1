@@ -8,7 +8,7 @@ from http.cookiejar import CookieJar
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import quote, urlparse, urlunparse
-from urllib.request import HTTPCookieProcessor, Request, build_opener
+from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from server import create_server
@@ -23,9 +23,9 @@ class ApiBoundaryTests(unittest.TestCase):
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.base = f'http://127.0.0.1:{self.server.server_port}'
-        self.admin = build_opener(HTTPCookieProcessor(CookieJar()))
-        self.manager = build_opener(HTTPCookieProcessor(CookieJar()))
-        self.viewer = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.admin = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
+        self.manager = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
+        self.viewer = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
 
     def tearDown(self):
         self.server.shutdown()
@@ -371,7 +371,7 @@ class ApiBoundaryTests(unittest.TestCase):
         pid = project['id']
 
         # 未登录的客户端
-        unauth = build_opener(HTTPCookieProcessor(CookieJar()))
+        unauth = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
 
         status, error = self.req(unauth, f'/api/projects/{pid}/requirements', 'GET')
         self.assertEqual(status, 401)

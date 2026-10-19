@@ -8,7 +8,7 @@ import threading
 import unittest
 import socket
 from urllib.error import HTTPError
-from urllib.request import HTTPCookieProcessor, Request, build_opener
+from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -22,8 +22,8 @@ class HttpTests(unittest.TestCase):
         self.server = create_server(str(Path(self.tmp.name) / 'api.db'), 0)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True); self.thread.start()
         self.base = f'http://127.0.0.1:{self.server.server_port}'
-        self.admin = build_opener(HTTPCookieProcessor(CookieJar()))
-        self.member = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.admin = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
+        self.member = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
 
     def tearDown(self):
         self.server.shutdown(); self.thread.join(); self.server.server_close(); self.server.store.close()
@@ -117,7 +117,7 @@ class HttpTests(unittest.TestCase):
                                  {'status': 'doing', 'version': task['version']})
         self.assertEqual((status, moved['status']), (200, 'doing'))
         self.assertEqual(self.req(self.member, f"/api/projects/{project['id']}/members")[0], 200)
-        viewer_client = build_opener(HTTPCookieProcessor(CookieJar()))
+        viewer_client = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
         self.req(viewer_client, '/api/login', 'POST',
                  {'email': 'viewer@example.test', 'password': 'ViewerPass123'})
         self.assertEqual(self.req(viewer_client, f"/api/projects/{project['id']}/tasks")[0], 200)
@@ -260,7 +260,7 @@ class HttpTests(unittest.TestCase):
         clients = []
         with patch.object(self.server.store, 'authenticate', return_value=user):
             for _ in range(SESSION_LIMIT + 1):
-                client = build_opener(HTTPCookieProcessor(CookieJar()))
+                client = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
                 self.assertEqual(self.req(client, '/api/login', 'POST')[0], 200)
                 clients.append(client)
             self.assertEqual(self.req(clients[0], '/api/me')[0], 401)
@@ -387,6 +387,11 @@ class HttpTests(unittest.TestCase):
                 for connection in connections:
                     connection.close()
 
+    def test_loopback_client_ignores_system_proxy_configuration(self):
+        with patch('urllib.request.getproxies', return_value={'http': 'http://127.0.0.1:1'}):
+            client = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
+            self.assertEqual(self.req(client, '/api/status'), (200, {'needs_setup': True}))
+
     def test_static_cache_and_unsupported_methods(self):
         with self.member.open(self.base + '/app.js') as response:
             self.assertEqual(response.headers['Cache-Control'], 'no-store')
@@ -428,7 +433,7 @@ class HttpTests(unittest.TestCase):
         headers = {'Content-Type': 'application/json'}
         forged = '00' * 32 + '.' + '11' * 32
         for extra, opener in [
-            ({'X-CSRF-Token': token}, build_opener()),
+            ({'X-CSRF-Token': token}, build_opener(ProxyHandler({}))),
             ({'X-CSRF-Token': forged, 'Cookie': f'csrf={forged}'}, self.member),
             ({'X-CSRF-Token': token, 'Cookie': f'csrf={forged}'}, self.member),
             ({'X-CSRF-Token': token, 'Cookie': 'csrf="é"'}, self.member),
@@ -486,7 +491,7 @@ class HttpTests(unittest.TestCase):
             'Content-Type': 'application/json', 'X-CSRF-Token': active, 'Cookie': f'csrf={active}',
         })
         with self.assertRaises(HTTPError) as failure:
-            build_opener().open(transplanted, timeout=3)
+            build_opener(ProxyHandler({})).open(transplanted, timeout=3)
         failure.exception.close()
         self.assertEqual(failure.exception.code, 403)
         self.assertEqual(self.req(self.admin, '/api/logout', 'POST')[0], 200)
