@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 import re
 import secrets
+import socket
 import threading
 import time
 from urllib.parse import parse_qs, urlparse
@@ -20,6 +21,8 @@ SESSION_TTL = 2 * 60 * 60
 LOGIN_WINDOW = 60
 LOGIN_LIMIT = 5
 SESSION_LIMIT = 5
+REJECT_DRAIN_LIMIT = 1024 * 1024
+REJECT_DRAIN_TIMEOUT = 0.2
 
 
 class LocalServer(ThreadingHTTPServer):
@@ -37,7 +40,7 @@ class LocalServer(ThreadingHTTPServer):
             except OSError:
                 logging.warning('Overload response could not be delivered')
             finally:
-                self.shutdown_request(request)
+                self.finish_rejected_socket(request)
             return
         try:
             super().process_request(request, client_address)
@@ -51,6 +54,29 @@ class LocalServer(ThreadingHTTPServer):
         finally:
             self.slots.release()
 
+    def finish_rejected_socket(self, request):
+        """Finish a rejection without resetting clients that already sent data."""
+        try:
+            request.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+        try:
+            deadline = time.monotonic() + REJECT_DRAIN_TIMEOUT
+            remaining = REJECT_DRAIN_LIMIT
+            while remaining:
+                timeout = deadline - time.monotonic()
+                if timeout <= 0:
+                    break
+                request.settimeout(timeout)
+                chunk = request.recv(min(8192, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except OSError:
+            pass
+        finally:
+            self.close_request(request)
+
 
 class Handler(BaseHTTPRequestHandler):
     timeout = 2
@@ -63,6 +89,42 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, format_string, *args):
         print('%s - %s' % (self.address_string(), format_string % args))
+
+    def finish(self):
+        try:
+            if getattr(self, '_drain_rejected_body', False):
+                self.finish_rejected_body()
+        finally:
+            super().finish()
+
+    def finish_rejected_body(self):
+        """Bound rejection cleanup so Windows clients receive the JSON response."""
+        lengths = self.headers.get_all('Content-Length', [])
+        if (self.headers.get_all('Transfer-Encoding') or len(lengths) != 1
+                or not re.fullmatch(r'[0-9]{1,10}', lengths[0])):
+            return
+        remaining = int(lengths[0]) - getattr(self, '_body_bytes_read', 0)
+        if remaining <= 0:
+            return
+        try:
+            self.wfile.flush()
+            self.connection.shutdown(socket.SHUT_WR)
+        except (OSError, ValueError):
+            return
+        try:
+            deadline = time.monotonic() + REJECT_DRAIN_TIMEOUT
+            remaining = min(remaining, REJECT_DRAIN_LIMIT)
+            while remaining:
+                timeout = deadline - time.monotonic()
+                if timeout <= 0:
+                    break
+                self.connection.settimeout(timeout)
+                chunk = self.rfile.read1(min(8192, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except (OSError, ValueError):
+            pass
 
     @property
     def store(self):
@@ -100,6 +162,7 @@ class Handler(BaseHTTPRequestHandler):
         if length > 16_384:
             raise AppError('请求内容过大。', 413)
         body = self.rfile.read(length)
+        self._body_bytes_read = len(body)
         if len(body) != length:
             raise ConnectionAbortedError('Incomplete request body')
         def unique_object(pairs):
@@ -232,6 +295,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._defer_reply = False
             self.write_reply(*self._response)
         except AppError as exc:
+            if method in ('POST', 'PUT', 'DELETE') and not hasattr(self, '_payload'):
+                self._drain_rejected_body = True
             self.reply({'error': str(exc)}, exc.status)
         except (ConnectionError, TimeoutError):
             logging.warning('Request interrupted or timed out: %s', self.path)

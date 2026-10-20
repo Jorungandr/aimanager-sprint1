@@ -1,5 +1,6 @@
 """直接请求 API，验证前端之外的越权阻断。"""
 from http.cookiejar import CookieJar
+from email.message import Message
 from pathlib import Path
 import json
 import sys
@@ -9,10 +10,10 @@ import unittest
 import socket
 from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from server import create_server, Handler, SESSION_TTL, SESSION_LIMIT, LOGIN_WINDOW, LOGIN_LIMIT
+from server import create_server, Handler, SESSION_TTL, SESSION_LIMIT, LOGIN_WINDOW, LOGIN_LIMIT, REJECT_DRAIN_LIMIT, REJECT_DRAIN_TIMEOUT
 from service import AppError
 
 
@@ -455,6 +456,54 @@ class HttpTests(unittest.TestCase):
         with failure.exception as response:
             self.assertEqual(response.status, 403)
         self.assertTrue(self.server.store.needs_setup())
+
+    def test_early_rejection_responses_remain_readable_with_pending_body(self):
+        for body_size in (16_385, 256 * 1024):
+            for _ in range(10):
+                request = Request(self.base + '/api/setup', data=b'x' * body_size, headers={
+                    'Content-Type': 'application/json',
+                    'Origin': 'https://untrusted.example',
+                })
+                with self.assertRaises(HTTPError) as failure:
+                    self.member.open(request, timeout=3)
+                with failure.exception as response:
+                    self.assertEqual(response.status, 403)
+                    self.assertIn('error', json.load(response))
+        self.assertTrue(self.server.store.needs_setup())
+
+    def test_rejection_cleanup_obeys_total_deadline_with_continuous_data(self):
+        for overload in (False, True):
+            with self.subTest(overload=overload):
+                now = [0.0]
+
+                def drip(size):
+                    now[0] += REJECT_DRAIN_TIMEOUT * 0.4
+                    return b'x' * size
+
+                connection = Mock()
+                connection.recv.side_effect = drip
+                handler = object.__new__(Handler)
+                handler.connection = connection
+                handler.wfile = Mock()
+                handler.rfile = Mock()
+                handler.rfile.read.side_effect = drip
+                handler.rfile.read1.side_effect = drip
+                handler.headers = Message()
+                handler.headers['Content-Length'] = str(REJECT_DRAIN_LIMIT)
+                with patch('server.time.monotonic', side_effect=lambda: now[0]):
+                    if overload:
+                        self.server.finish_rejected_socket(connection)
+                        reader = connection.recv
+                        connection.close.assert_called_once()
+                    else:
+                        handler.finish_rejected_body()
+                        reader = handler.rfile.read1
+                        handler.rfile.read.assert_not_called()
+                self.assertEqual(reader.call_count, 3)
+                timeouts = [call.args[0] for call in connection.settimeout.call_args_list]
+                self.assertEqual(len(timeouts), 3)
+                self.assertTrue(all(0 < value <= REJECT_DRAIN_TIMEOUT for value in timeouts))
+                self.assertLess(timeouts[-1], timeouts[0])
 
     def test_csrf_missing_token_blocks_initialization_before_database_write(self):
         request = Request(self.base + '/api/setup', data=json.dumps({
