@@ -183,6 +183,20 @@ try {
     }
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+    for (const [rows, dialogId] of [['.task-card', 'taskDialog'], ['.requirements li:not(.is-archived)', 'requirementDialog']]) {
+        await page.locator(rows).first().getByRole('button', { name: '编辑', exact: true }).click();
+        const usable = await page.locator(`#${dialogId}`).evaluate(dialog => {
+            const save = dialog.querySelector('[type=submit]');
+            const rect = save.getBoundingClientRect();
+            const bounds = dialog.getBoundingClientRect();
+            const close = dialog.querySelector('.section-heading button').getBoundingClientRect();
+            return rect.top >= bounds.top && rect.bottom <= Math.min(bounds.bottom, innerHeight)
+                && save.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2))
+                && close.width < bounds.width / 2;
+        });
+        assert.equal(usable, true, `${dialogId}: mobile save must be visible and unobstructed; close must stay compact`);
+        await page.keyboard.press('Escape');
+    }
     await page.locator('.task-card').first().getByRole('button', { name: '编辑', exact: true }).click();
     assert.equal(await page.locator('#editTaskForm [type=submit]').isEnabled(), true);
     const loggedOut = await writeApi('post', `${url}/api/logout`, { data: {} });
