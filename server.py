@@ -61,9 +61,13 @@ class LocalServer(ThreadingHTTPServer):
         except OSError:
             pass
         try:
-            request.settimeout(REJECT_DRAIN_TIMEOUT)
+            deadline = time.monotonic() + REJECT_DRAIN_TIMEOUT
             remaining = REJECT_DRAIN_LIMIT
             while remaining:
+                timeout = deadline - time.monotonic()
+                if timeout <= 0:
+                    break
+                request.settimeout(timeout)
                 chunk = request.recv(min(8192, remaining))
                 if not chunk:
                     break
@@ -108,10 +112,14 @@ class Handler(BaseHTTPRequestHandler):
         except (OSError, ValueError):
             return
         try:
-            self.connection.settimeout(REJECT_DRAIN_TIMEOUT)
+            deadline = time.monotonic() + REJECT_DRAIN_TIMEOUT
             remaining = min(remaining, REJECT_DRAIN_LIMIT)
             while remaining:
-                chunk = self.rfile.read(min(8192, remaining))
+                timeout = deadline - time.monotonic()
+                if timeout <= 0:
+                    break
+                self.connection.settimeout(timeout)
+                chunk = self.rfile.read1(min(8192, remaining))
                 if not chunk:
                     break
                 remaining -= len(chunk)

@@ -59,7 +59,7 @@ python -m unittest discover -s tests -v
 
 ## 本次验证
 
-后端验证命令保持`python -m unittest discover -s tests -v`。当前全量测试包含132项，执行结果以当前提交的运行输出和CI为准。覆盖Sprint 1回归、Sprint 2需求任务链路、HTTP接口契约、权限边界、版本冲突、查询边界、旧库迁移、故障回滚、备份恢复、重启持久化、口令格式兼容升级、CSRF令牌校验与只读健康检查。请求入口还拒绝重复JSON字段、非标准NaN/Infinity常量、过深嵌套、重复或非法Content-Length及不支持的Transfer-Encoding，相关回归验证拒绝后数据库不变。HTTP测试使用显式直连的127.0.0.1客户端，不继承系统代理，避免本机代理的502或转发行为干扰安全边界断言。
+后端验证命令保持`python -m unittest discover -s tests -v`。当前全量测试包含134项，执行结果以当前提交的运行输出和CI为准。覆盖Sprint 1回归、Sprint 2需求任务链路、HTTP接口契约、权限边界、版本冲突、查询边界、旧库迁移、故障回滚、备份恢复、重启持久化、口令格式兼容升级、CSRF令牌校验与只读健康检查。请求入口还拒绝重复JSON字段、非标准NaN/Infinity常量、过深嵌套、重复或非法Content-Length及不支持的Transfer-Encoding，相关回归验证拒绝后数据库不变。HTTP测试使用显式直连的127.0.0.1客户端，不继承系统代理，避免本机代理的502或转发行为干扰安全边界断言。提前拒绝及过载响应采用半关闭写端后排空待接收数据的收尾方式，排空受0.2秒总截止时间及1 MiB读取上限约束；Windows与Ubuntu后端回归均纳入CI。
 
 自动浏览器回归使用单独的临时数据库，不修改真实账号和任务：
 
