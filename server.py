@@ -179,6 +179,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             value = json.loads(body or b'{}', object_pairs_hook=unique_object,
                                parse_constant=reject_constant)
+            # Validate all nested strings and finite numbers before SQLite or response encoding.
+            json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8')
         except (ValueError, RecursionError) as exc:
             raise AppError('JSON 格式不合法。') from exc
         if not isinstance(value, dict):
@@ -528,7 +530,11 @@ def create_server(db_path, port=8765):
     server.csrf_secret = secrets.token_bytes(32)
     server.login_failures = defaultdict(deque)
     server.clock = time.monotonic
-    server.store = Store(db_path)
+    try:
+        server.store = Store(db_path)
+    except Exception:
+        server.server_close()
+        raise
     return server
 
 

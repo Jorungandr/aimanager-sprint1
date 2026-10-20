@@ -28,6 +28,28 @@ class BusinessWorkflowTests(unittest.TestCase):
             self.project_id, 'Implement workflow', self.requirement['id'],
             self.member['id'], '2026-10-20', self.admin['id'], 'todo')
 
+    def test_version_only_task_update_does_not_change_task(self):
+        with self.assertRaises(AppError) as denied:
+            self.store.update_task(self.project_id, self.task['id'], {'version': self.task['version']})
+        self.assertEqual(denied.exception.status, 400)
+        self.assertEqual(self.store.get_task(self.project_id, self.task['id']), self.task)
+
+    def test_full_sort_column_rejects_append_without_partial_write(self):
+        task = self.store.update_task(self.project_id, self.task['id'], {
+            'position': 2**63 - 1, 'version': self.task['version'],
+        })
+        before = self.store.list_tasks(self.project_id)
+        with self.assertRaises(AppError) as denied:
+            self.store.create_task(self.project_id, 'Cannot append', None, None, None, self.admin['id'], 'todo')
+        self.assertEqual(denied.exception.status, 400)
+        self.assertEqual(self.store.list_tasks(self.project_id), before)
+        other = self.store.create_task(self.project_id, 'Other column', None, None, None, self.admin['id'])
+        with self.assertRaises(AppError) as denied:
+            self.store.update_task(self.project_id, other['id'], {'status': 'todo', 'version': other['version']})
+        self.assertEqual(denied.exception.status, 400)
+        self.assertEqual(self.store.get_task(self.project_id, other['id']), other)
+        self.assertEqual(self.store.get_task(self.project_id, task['id']), task)
+
     def test_requirement_delivery_archive_restore_and_reopen(self):
         self.store.require_permission(self.member, self.project_id, 'workitems.manage')
         requirement = self.store.update_requirement(self.project_id, self.requirement['id'], {

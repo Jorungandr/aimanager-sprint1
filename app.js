@@ -125,6 +125,10 @@ async function runGuarded(button, action) {
 }
 function formData(form) { return Object.fromEntries(new FormData(form).entries()); }
 async function submit(form, path, after, method = 'POST') {
+  if (form.dataset.submitting === 'true') {
+    return;
+  }
+  form.dataset.submitting = 'true';
   let problem = form.querySelector('[data-form-error]');
   if (!problem) {
     problem = document.createElement('p');
@@ -149,6 +153,7 @@ async function submit(form, path, after, method = 'POST') {
     problem.textContent = error.message;
     say(error.message, true);
   } finally {
+    delete form.dataset.submitting;
     buttons.forEach(button => { button.disabled = false; });
   }
 }

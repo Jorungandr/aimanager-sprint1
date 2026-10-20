@@ -108,9 +108,20 @@ try {
     await page.getByRole('button', { name: '创建并登录', exact: true }).click();
     await page.locator('#workspace').waitFor({ state: 'visible' });
     await page.getByRole('button', { name: '管理配置', exact: true }).click();
+    let projectWrites = 0;
+    await page.route('**/api/projects', async route => {
+        if (route.request().method() === 'POST') {
+            projectWrites += 1;
+            await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+        }
+        await route.continue();
+    });
     await page.locator('#projectForm [name=name]').fill('Alpha');
     await page.getByRole('button', { name: '创建项目', exact: true }).click();
+    await page.locator('#projectForm').evaluate(form => form.requestSubmit());
     await page.getByRole('heading', { name: 'Alpha', exact: true }).waitFor();
+    assert.equal(projectWrites, 1, 'Repeated form submission must create only one project');
+    await page.unroute('**/api/projects');
 
     const userResponse = await writeApi('post', `${url}/api/users`, { data: { email: 'member2@example.test', password: 'DemoPass123' } });
     assert.equal(userResponse.status(), 201, '创建第二位成员账号');

@@ -511,6 +511,7 @@ class Store:
         self.get_user(created_by)
         position = self._one('''SELECT COALESCE(MAX(position),-1)+1 AS n FROM tasks
             WHERE project_id=? AND status=?''', (project_id, status))['n']
+        position = self._integer(position, '任务排序值', minimum=0)
         with self.db:
             cur = self.db.execute('''INSERT INTO tasks(
                 project_id,requirement_id,title,assignee_user_id,due_date,status,position,created_by)
@@ -542,6 +543,8 @@ class Store:
         version = self._integer(changes['version'], '任务版本')
         if version != current['version']:
             raise AppError('任务已被其他操作修改，请刷新后重新编辑。', 409)
+        if not (allowed - {'version'}).intersection(changes):
+            raise AppError('至少提供一个任务修改字段。')
         values = dict(current)
         values.update(changes)
         values['title'] = self._short_text(values['title'], '任务标题', 100)
@@ -555,6 +558,7 @@ class Store:
             if values['status'] != current['status'] and 'position' not in changes:
                 position = self._one('''SELECT COALESCE(MAX(position),-1)+1 AS n FROM tasks
                     WHERE project_id=? AND status=?''', (project_id, values['status']))['n']
+                position = self._integer(position, '任务排序值', minimum=0)
             result = self.db.execute('''UPDATE tasks SET title=?,requirement_id=?,assignee_user_id=?,
                 due_date=?,status=?,position=?,version=version+1 WHERE project_id=? AND id=? AND version=?
                 AND (? IS NULL OR requirement_id=? OR EXISTS (

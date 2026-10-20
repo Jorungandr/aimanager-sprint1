@@ -13,7 +13,7 @@ from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_ope
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from server import create_server, Handler, SESSION_TTL, SESSION_LIMIT, LOGIN_WINDOW, LOGIN_LIMIT, REJECT_DRAIN_LIMIT, REJECT_DRAIN_TIMEOUT
+from server import create_server, Handler, LocalServer, SESSION_TTL, SESSION_LIMIT, LOGIN_WINDOW, LOGIN_LIMIT, REJECT_DRAIN_LIMIT, REJECT_DRAIN_TIMEOUT
 from service import AppError
 
 
@@ -46,6 +46,40 @@ class HttpTests(unittest.TestCase):
     def csrf_token(self, opener):
         with opener.open(self.base + '/api/csrf', timeout=3) as response:
             return json.load(response)['csrf_token']
+
+    def test_invalid_unicode_and_overflowing_json_numbers_never_write(self):
+        self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
+        token = self.csrf_token(self.admin)
+        for body in [b'{"name":"\\ud800"}', b'{"name":"\\udfff"}',
+                     b'{"name":"Bad","extra":{"\\ud800":1}}',
+                     b'{"name":"Bad","extra":[1e999]}']:
+            with self.subTest(body=body):
+                request = Request(self.base + '/api/roles', data=body, headers={
+                    'Content-Type': 'application/json', 'X-CSRF-Token': token,
+                })
+                with self.assertRaises(HTTPError) as failure:
+                    self.admin.open(request, timeout=3)
+                with failure.exception as response:
+                    self.assertEqual(response.status, 400)
+                    self.assertIn('error', json.load(response))
+        self.assertEqual(self.req(self.admin, '/api/roles'), (200, []))
+
+    def test_database_startup_failure_releases_listening_socket(self):
+        created = []
+
+        def allocate(*args, **kwargs):
+            server = LocalServer(*args, **kwargs)
+            created.append(server)
+            return server
+
+        try:
+            with patch('server.LocalServer', side_effect=allocate), patch('server.Store', side_effect=OSError('Unavailable database')):
+                with self.assertRaisesRegex(OSError, 'Unavailable database'):
+                    create_server(':memory:', 0)
+            self.assertEqual(created[0].socket.fileno(), -1)
+        finally:
+            for server in created:
+                server.server_close()
 
     def test_member_cannot_edit_roles_or_members_and_loses_access_on_removal(self):
         self.assertEqual(self.req(self.admin, '/api/setup', 'POST',
