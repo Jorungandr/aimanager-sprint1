@@ -31,6 +31,19 @@ try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
+    // 折叠面板展开状态现按项目保存在页面内存：刷新后此前展开的面板保持展开。
+    // 因此“点击 summary”从“假设闭合后展开”改为幂等的“未展开才点击”，断言本身不变。
+    const ensureOpen = async summaryText => {
+        const details = page.locator('#projects details').filter({ has: page.locator('summary', { hasText: summaryText }) });
+        if (!(await details.evaluate(element => element.open))) {
+            await details.locator('summary').click();
+        }
+    };
+    // 轮询某按钮达到禁用/启用状态；用 CSS 选择器每次重新查询，兼容刷新重建 DOM
+    const waitButtonState = (selector, disabled) => page.waitForFunction(({ selector, disabled }) => {
+        const element = document.querySelector(selector);
+        return Boolean(element) && element.disabled === disabled;
+    }, { selector, disabled });
     await page.goto(url);
     await page.locator('#setupForm [name=email]').fill('ui@example.test');
     await page.locator('#setupForm [name=password]').fill('DemoPass123');
@@ -40,7 +53,7 @@ try {
     await page.locator('#projectForm [name=name]').fill('Browser smoke project');
     await page.locator('#projectForm button').click();
     await page.getByRole('heading', { name: 'Browser smoke project', exact: true }).waitFor();
-    await page.getByText('新建需求或任务', { exact: true }).click();
+    await ensureOpen('新建需求或任务');
     const creation = page.locator('.workitem-forms form').last();
     await creation.locator('[name=title]').fill('Browser smoke task');
     await creation.getByRole('button', { name: '保存任务', exact: true }).click();
@@ -82,26 +95,35 @@ try {
     await page.locator('#taskDialog').waitFor({ state: 'hidden' });
     await page.getByRole('searchbox', { name: '搜索任务' }).fill('');
     await page.getByRole('button', { name: '刷新数据', exact: true }).click();
-    await page.getByText('新建需求或任务', { exact: true }).click();
+    // 刷新按钮在刷新期间禁用、结束后恢复；等待落定，避免后续点击与重建中的 DOM 竞态
+    await waitButtonState('#refreshWorkspace', true);
+    await waitButtonState('#refreshWorkspace', false);
+    await ensureOpen('新建需求或任务');
     const requirementForm = page.locator('.workitem-forms form').first();
     await requirementForm.locator('[name=title]').fill('Lifecycle requirement');
-    await requirementForm.getByRole('button', { name: '保存需求', exact: true }).click();
-    await page.getByText('需求列表 · 1 条', { exact: true }).click();
+    const saveRequirement = requirementForm.getByRole('button', { name: '保存需求', exact: true });
+    const requirementPosted = page.waitForResponse(response => response.request().method() === 'POST' && response.url().includes('/requirements'));
+    await saveRequirement.click();
+    await requirementPosted;
+    await page.locator('.requirements li').first().waitFor({ state: 'attached' });
+    await ensureOpen('需求列表');
     const requirementRow = page.locator('.requirements li');
     await requirementRow.getByRole('button', { name: '编辑', exact: true }).click();
     await page.locator('#editRequirementForm [name=title]').fill('Updated lifecycle');
+    const requirementSaved = page.waitForResponse(response => response.request().method() === 'PUT' && /\/requirements\/\d+$/.test(response.url()));
     await page.locator('#editRequirementForm [type=submit]').click();
+    await requirementSaved;
     await page.locator('#requirementDialog').waitFor({ state: 'hidden' });
-    await page.getByText('需求列表 · 1 条', { exact: true }).click();
+    await ensureOpen('需求列表');
     await requirementRow.getByText('Updated lifecycle', { exact: true }).waitFor();
     page.once('dialog', dialog => dialog.accept());
     await requirementRow.getByRole('button', { name: '归档', exact: true }).click();
-    await page.getByText('需求列表 · 1 条', { exact: true }).click();
+    await ensureOpen('需求列表');
     await requirementRow.getByRole('button', { name: '恢复', exact: true }).waitFor();
-    await page.getByText('新建需求或任务', { exact: true }).click();
+    await ensureOpen('新建需求或任务');
     assert.equal(await page.locator('.workitem-forms select[name=requirement_id] option').count(), 1);
     await requirementRow.getByRole('button', { name: '恢复', exact: true }).click();
-    await page.getByText('新建需求或任务', { exact: true }).click();
+    await ensureOpen('新建需求或任务');
     await page.locator('.workitem-forms select[name=requirement_id] option').filter({ hasText: 'Updated lifecycle' }).waitFor({ state: 'attached' });
     // Delayed responses from a closed editor must not alter a newer editor.
     const projectBase = `${url}/api/projects/${projects[0].id}`;
