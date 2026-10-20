@@ -5,6 +5,16 @@ const permissionLabels = { 'project.view': '查看项目', 'members.manage': '�
 const statusLabels = { backlog: '待梳理', todo: '待办', doing: '进行中', done: '已完成' };
 let activeProject = '', activeView = 'collaboration', projectRequest = 0, editingTask = null, editingRequirement = null, dialogOpener = null;
 const filters = new Map();
+/* 折叠面板展开状态：仅页面内存，按项目隔离；退出登录时随 filters 一起清空，不恢复旧账号界面状态 */
+const panelState = new Map();
+function panelOpen(projectId, name) {
+  return panelState.get(projectId)?.[name] === true;
+}
+function recordPanel(projectId, name, open) {
+  const state = panelState.get(projectId) || {};
+  state[name] = open;
+  panelState.set(projectId, state);
+}
 let csrfRequest = null;
 /* 服务端错误统一转成面向用户的提示：不把状态码抛给用户，保留业务原因。 */
 const statusFallback = {
@@ -45,6 +55,7 @@ function enterLoggedOut() {
   projectRequest += 1;
   closeDialogs();
   filters.clear();
+  panelState.clear();
   activeProject = '';
   $('workspace').hidden = true;
   $('logout').hidden = true;
@@ -96,6 +107,21 @@ function say(message, error = false) {
   const notice = $('notice');
   notice.textContent = message;
   notice.className = error ? 'error' : 'ok';
+}
+/* 进行中保护：请求期间禁用按钮，防止连点产生重复写请求。
+   失败/取消路径都不会残留禁用态；refresh() 重建 DOM 后旧按钮已脱离页面，无需也不应再改它的状态。 */
+async function runGuarded(button, action) {
+  if (button.disabled) {
+    return;
+  }
+  button.disabled = true;
+  try {
+    await action();
+  } finally {
+    if (button.isConnected) {
+      button.disabled = false;
+    }
+  }
 }
 function formData(form) { return Object.fromEntries(new FormData(form).entries()); }
 async function submit(form, path, after, method = 'POST') {
@@ -215,13 +241,15 @@ function renderMatrix() {
     const button = document.createElement('button');
     button.textContent = '保存权限';
     button.addEventListener('click', async () => {
-      try {
-        await api(`/api/roles/${role.id}/permissions`, { method: 'PUT', body: JSON.stringify({ permissions: Object.keys(checks).filter(k => checks[k].checked) }) });
-        say('权限已保存');
-        await refresh();
-      } catch (e) {
-        say(e.message, true);
-      }
+      await runGuarded(button, async () => {
+        try {
+          await api(`/api/roles/${role.id}/permissions`, { method: 'PUT', body: JSON.stringify({ permissions: Object.keys(checks).filter(k => checks[k].checked) }) });
+          say('权限已保存');
+          await refresh();
+        } catch (e) {
+          say(e.message, true);
+        }
+      });
     });
     action.append(button);
     tr.append(action);
@@ -262,6 +290,10 @@ async function renderProjects() {
 }
 function renderMembers(card, project, members, canManage, assignableRoles) {
   const details = document.createElement('details');
+  if (panelOpen(project.id, 'members')) {
+    details.open = true;
+  }
+  details.addEventListener('toggle', () => recordPanel(project.id, 'members', details.open));
   const summary = document.createElement('summary');
   summary.textContent = `项目成员 · ${members.length} 人${canManage ? ' · 展开管理' : ''}`;
   details.append(summary);
@@ -273,7 +305,18 @@ function renderMembers(card, project, members, canManage, assignableRoles) {
     const row = document.createElement('p'); row.textContent = `${member.email} · ${member.role_name} `;
     if (canManage && !member.is_owner) {
       const remove = document.createElement('button'); remove.className = 'danger'; remove.textContent = '移出项目';
-      remove.addEventListener('click', async () => { if (!confirm(`移出 ${member.email}？`)) return; try { await api(`/api/projects/${project.id}/members/${member.user_id}`, { method: 'DELETE' }); say('成员已移出，权限已回收'); await refresh(); } catch (e) { say(e.message, true); } });
+      remove.addEventListener('click', async () => {
+        if (!confirm(`移出 ${member.email}？`)) return;
+        await runGuarded(remove, async () => {
+          try {
+            await api(`/api/projects/${project.id}/members/${member.user_id}`, { method: 'DELETE' });
+            say('成员已移出，权限已回收');
+            await refresh();
+          } catch (e) {
+            say(e.message, true);
+          }
+        });
+      });
       row.append(remove);
     }
     list.append(row);
@@ -303,13 +346,20 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
   const openRequirements = requirements.filter(item => !item.archived);
   const archivedCount = requirements.length - openRequirements.length;
   const requirementDetails = document.createElement('details');
+  // 空列表首次访问默认展开（延续原行为）；用户手动折叠后尊重其选择
+  const panel = panelState.get(project.id) || {};
+  if (panel.requirements === undefined) {
+    requirementDetails.open = !requirements.length;
+  } else {
+    requirementDetails.open = panel.requirements;
+  }
+  requirementDetails.addEventListener('toggle', () => recordPanel(project.id, 'requirements', requirementDetails.open));
   const requirementSummary = document.createElement('summary');
   requirementSummary.textContent = `需求列表 · ${requirements.length} 条`;
   // 归档数量用 title 补充说明，不改变 summary 文本本身
   if (archivedCount) requirementSummary.title = `其中 ${archivedCount} 条已归档：仅保留历史任务的关联，不可用于新任务`;
   requirementDetails.append(requirementSummary);
   if (!requirements.length) {
-    requirementDetails.open = true;
     const empty = document.createElement('div');
     empty.className = 'empty-state compact';
     empty.textContent = '还没有需求条目。需求用于归类任务，可以先建需求，也可以直接建任务。';
@@ -339,15 +389,15 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
           restore.type = 'button';
           restore.textContent = '恢复';
           restore.addEventListener('click', async () => {
-            restore.disabled = true;
-            try {
-              await api(`/api/projects/${project.id}/requirements/${item.id}/restore`, { method: 'POST', body: JSON.stringify({ version: item.version }) });
-              say('需求已恢复，可以重新关联任务');
-              await refresh();
-            } catch (error) {
-              say(error.message, true);
-              restore.disabled = false;
-            }
+            await runGuarded(restore, async () => {
+              try {
+                await api(`/api/projects/${project.id}/requirements/${item.id}/restore`, { method: 'POST', body: JSON.stringify({ version: item.version }) });
+                say('需求已恢复，可以重新关联任务');
+                await refresh();
+              } catch (error) {
+                say(error.message, true);
+              }
+            });
           });
           actions.append(restore);
         } else {
@@ -362,13 +412,15 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
           archive.textContent = '归档';
           archive.addEventListener('click', async () => {
             if (!confirm(`归档需求"${item.title}"？历史任务将保留关联。`)) return;
-            try {
-              await api(`/api/projects/${project.id}/requirements/${item.id}/archive`, { method: 'POST', body: JSON.stringify({ version: item.version }) });
-              say('需求已归档，历史任务仍保留关联');
-              await refresh();
-            } catch (error) {
-              say(error.message, true);
-            }
+            await runGuarded(archive, async () => {
+              try {
+                await api(`/api/projects/${project.id}/requirements/${item.id}/archive`, { method: 'POST', body: JSON.stringify({ version: item.version }) });
+                say('需求已归档，历史任务仍保留关联');
+                await refresh();
+              } catch (error) {
+                say(error.message, true);
+              }
+            });
           });
           actions.append(edit, archive);
         }
@@ -381,7 +433,7 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
   card.append(requirementDetails);
   if (canManage) {
     const forms = document.createElement('div'); forms.className = 'workitem-forms';
-    const requirementForm = document.createElement('form'); requirementForm.innerHTML = '<h5>新增需求</h5><label>标题<input name="title" maxlength="80" required></label><label>说明<input name="description" maxlength="500"></label><button>保存需求</button>';
+    const requirementForm = document.createElement('form'); requirementForm.innerHTML = '<h5>新增需求</h5><label>标题<input name="title" maxlength="80" required></label><label>说明<textarea name="description" maxlength="500" rows="3" placeholder="可选；说明背景、边界或验收要点"></textarea></label><button>保存需求</button>';
     requirementForm.addEventListener('submit', event => { event.preventDefault(); submit(requirementForm, `/api/projects/${project.id}/requirements`, refresh); });
     const taskForm = document.createElement('form'); const taskTitle = document.createElement('h5'); taskTitle.textContent = '新增任务'; taskForm.append(taskTitle);
     const titleLabel = document.createElement('label'); titleLabel.textContent = '标题'; const titleInput = document.createElement('input'); titleInput.name = 'title'; titleInput.maxLength = 100; titleInput.required = true; titleLabel.append(titleInput); taskForm.append(titleLabel);
@@ -399,6 +451,10 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
     const create = document.createElement('button'); create.textContent = '保存任务'; taskForm.append(create);
     taskForm.addEventListener('submit', event => { event.preventDefault(); submit(taskForm, `/api/projects/${project.id}/tasks`, refresh); });
     const createDetails = document.createElement('details');
+    if (panelOpen(project.id, 'create')) {
+      createDetails.open = true;
+    }
+    createDetails.addEventListener('toggle', () => recordPanel(project.id, 'create', createDetails.open));
     const createSummary = document.createElement('summary');
     createSummary.textContent = '新建需求或任务';
     forms.append(requirementForm, taskForm);
@@ -747,6 +803,7 @@ $('logout').addEventListener('click', async () => {
   try {
     await api('/api/logout', { method: 'POST', body: '{}' });
     filters.clear();
+    panelState.clear();
     activeProject = '';
     await refresh();
     say('已安全退出');
