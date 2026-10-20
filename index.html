@@ -106,21 +106,24 @@
       <div id="matrixPanel" hidden>
         <h3>角色—权限矩阵</h3>
         <p class="hint">勾选后点击该行的“保存权限”。含管理类权限的角色会自动包含“查看项目”，且不能授予自己未持有的权限。</p>
-        <div class="table-wrap">
-          <table id="matrix">
-            <caption class="visually-hidden">角色与权限对照表</caption>
-            <thead>
-              <tr>
-                <th scope="col">角色</th>
-                <th scope="col">查看项目</th>
-                <th scope="col">管理成员</th>
-                <th scope="col">管理项目</th>
-                <th scope="col">管理角色</th>
-                <th scope="col">操作</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+        <p class="scroll-hint">表格右侧还有“操作”列，左右滑动表格即可看到“保存权限”。</p>
+        <div class="table-scroll">
+          <div class="table-wrap" tabindex="0" role="region" aria-label="角色与权限矩阵，可横向滚动查看右侧“操作”列的“保存权限”按钮">
+            <table id="matrix">
+              <caption class="visually-hidden">角色与权限对照表</caption>
+              <thead>
+                <tr>
+                  <th scope="col">角色</th>
+                  <th scope="col">查看项目</th>
+                  <th scope="col">管理成员</th>
+                  <th scope="col">管理项目</th>
+                  <th scope="col">管理角色</th>
+                  <th scope="col">操作</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </div>
         <p class="empty-state" id="matrixEmpty">还没有创建角色。先在上方“创建角色”表单建立角色，再回到这里配置权限。</p>
       </div>
@@ -194,10 +197,12 @@
       <select name="status"></select>
     </label>
     <p class="hint">保存时会校验版本号；若他人已修改，会提示关闭弹窗并刷新后重试，不会覆盖别人的改动。</p>
-    <p id="taskDialogError" class="error dialog-error" role="alert" tabindex="-1"></p>
-    <div class="dialog-actions">
-      <button type="button" class="secondary" data-dialog-refresh hidden>刷新数据</button>
-      <button type="submit">保存修改</button>
+    <div class="dialog-footer">
+      <p id="taskDialogError" class="error dialog-error" role="alert" tabindex="-1"></p>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" data-dialog-refresh hidden>刷新数据</button>
+        <button type="submit">保存修改</button>
+      </div>
     </div>
   </form>
 </dialog>
@@ -216,10 +221,12 @@
       <textarea name="description" maxlength="500" rows="3" placeholder="可选；说明背景、边界或验收要点"></textarea>
     </label>
     <p class="hint">最多 500 字，可留空，超出部分无法输入。已归档的需求须先恢复才能编辑。</p>
-    <p id="requirementDialogError" class="error dialog-error" role="alert" tabindex="-1"></p>
-    <div class="dialog-actions">
-      <button type="button" class="secondary" data-dialog-refresh hidden>刷新数据</button>
-      <button type="submit">保存修改</button>
+    <div class="dialog-footer">
+      <p id="requirementDialogError" class="error dialog-error" role="alert" tabindex="-1"></p>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" data-dialog-refresh hidden>刷新数据</button>
+        <button type="submit">保存修改</button>
+      </div>
     </div>
   </form>
 </dialog>

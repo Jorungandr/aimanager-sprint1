@@ -193,10 +193,15 @@ h2 + .hint, h3 + .hint { margin: 0 0 14px; }
 .project-picker select { width: auto; min-width: 200px; margin-top: 0; }
 
 /* ---------- 表格 ---------- */
+.table-scroll { position: relative; }
+/* 窄屏提示：矩阵右侧仍有“操作”列，提示文字与渐变遮罩同时给出可滚动线索 */
+.scroll-hint { display: none; margin: 0 0 8px; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
 .table-wrap {
     margin: 0 0 14px; overflow-x: auto; -webkit-overflow-scrolling: touch;
     border: 1px solid var(--line); border-radius: var(--radius-md);
 }
+/* 可聚焦的横向滚动区：键盘用户聚焦后可用方向键滚动，焦点环由全局 :focus-visible 提供 */
+.table-wrap:focus-visible { outline-offset: 3px; }
 table { width: 100%; border-collapse: collapse; background: var(--surface); font-size: 13.5px; }
 th, td { padding: 11px 12px; border-bottom: 1px solid var(--line); text-align: center; white-space: nowrap; }
 th { background: var(--surface-soft); color: var(--muted); font-size: 12.5px; font-weight: 700; letter-spacing: .02em; }
@@ -362,6 +367,8 @@ pre {
 dialog {
     width: min(560px, calc(100% - 32px)); max-height: min(88vh, 760px);
     padding: 24px 26px; overflow: auto;
+    /* 底栏吸底后，用 scroll-padding 保证键盘聚焦下方字段时不会被操作区挡住 */
+    scroll-padding-bottom: 96px;
     border: 1px solid var(--line); border-radius: var(--radius-lg);
     background: var(--surface); color: var(--ink);
     box-shadow: 0 24px 70px rgb(22 41 58 / 28%);
@@ -370,6 +377,15 @@ dialog::backdrop { background: rgb(20 44 60 / 45%); backdrop-filter: blur(2px); 
 dialog h2 { margin: 0; font-size: 20px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 .dialog-actions button { flex: 0 0 auto; }
+/* 弹窗底栏：错误提示与操作按钮吸附在弹窗底部，内容再长也无需滚动到底才能保存 */
+.dialog-footer {
+    position: sticky; bottom: -24px; z-index: 2;
+    margin: 14px -26px -24px; padding: 12px 26px 18px;
+    border-top: 1px solid var(--line);
+    background: var(--surface);
+}
+.dialog-footer .dialog-error { margin: 0 0 10px; }
+.dialog-footer .dialog-actions { margin-top: 0; }
 /* 弹窗内错误与冲突提示：空时占位不撑高，有内容时作为可聚焦的警示区 */
 .dialog-error { margin: 10px 0 0; font-size: 13px; line-height: 1.7; }
 .dialog-error:empty { display: none; }
@@ -402,6 +418,20 @@ form[data-conflict="true"] [type="submit"] { opacity: .55; cursor: not-allowed; 
     .topbar-actions { width: 100%; }
     .summary { grid-template-columns: 1fr; }
     .section-heading { flex-direction: column; align-items: stretch; }
+    /* 弹窗内标题行保持横向：关闭按钮不被页面级断点拉伸成整行 */
+    dialog .section-heading { flex-direction: row; align-items: center; }
+    dialog .section-heading h2 { flex: 1 1 auto; min-width: 0; }
+    dialog .section-heading button { flex: 0 0 auto; width: auto; }
+    dialog { padding: 20px 18px; scroll-padding-bottom: 104px; }
+    .dialog-footer { bottom: -20px; margin: 14px -18px -20px; padding: 12px 18px 16px; }
+    .scroll-hint { display: block; }
+    /* 右侧渐隐遮罩暗示还有未显示的列，不拦截点击与滑动 */
+    .table-scroll::after {
+        content: ""; position: absolute; top: 0; right: 0; bottom: 14px; width: 24px;
+        border-radius: 0 var(--radius-md) var(--radius-md) 0;
+        background: linear-gradient(to left, rgb(255 255 255 / 95%), rgb(255 255 255 / 0%));
+        pointer-events: none;
+    }
     .project-picker { min-width: 0; }
     .project-picker select { width: 100%; min-width: 0; }
     .board { grid-template-columns: 1fr; }
