@@ -456,6 +456,20 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(response.status, 403)
         self.assertTrue(self.server.store.needs_setup())
 
+    def test_early_rejection_responses_remain_readable_with_pending_body(self):
+        for body_size in (16_385, 256 * 1024):
+            for _ in range(10):
+                request = Request(self.base + '/api/setup', data=b'x' * body_size, headers={
+                    'Content-Type': 'application/json',
+                    'Origin': 'https://untrusted.example',
+                })
+                with self.assertRaises(HTTPError) as failure:
+                    self.member.open(request, timeout=3)
+                with failure.exception as response:
+                    self.assertEqual(response.status, 403)
+                    self.assertIn('error', json.load(response))
+        self.assertTrue(self.server.store.needs_setup())
+
     def test_csrf_missing_token_blocks_initialization_before_database_write(self):
         request = Request(self.base + '/api/setup', data=json.dumps({
             'email': 'admin@example.test', 'password': 'AdminPass123',

@@ -96,6 +96,7 @@ try {
     await requirementRow.getByText('Updated lifecycle', { exact: true }).waitFor();
     page.once('dialog', dialog => dialog.accept());
     await requirementRow.getByRole('button', { name: '归档', exact: true }).click();
+    await page.locator('.requirements li.is-archived').waitFor({ state: 'attached' });
     await page.getByText('需求列表 · 1 条', { exact: true }).click();
     await requirementRow.getByRole('button', { name: '恢复', exact: true }).waitFor();
     await page.getByText('新建需求或任务', { exact: true }).click();

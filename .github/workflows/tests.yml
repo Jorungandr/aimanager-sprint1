@@ -27,6 +27,19 @@ jobs:
       - name: Run unit and integration tests
         run: python -m unittest discover -s tests -v
 
+  backend-regression-windows:
+    name: Backend regression (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Run unit and integration tests
+        run: python -m unittest discover -s tests -v
+
   browser-regression:
     name: Browser acceptance
     runs-on: ubuntu-latest
