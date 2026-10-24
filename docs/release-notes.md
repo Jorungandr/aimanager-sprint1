@@ -43,5 +43,5 @@
 ## 五、验证摘要
 
 - 单元与接口测试：`python -m unittest discover -s tests -v`，共 159 项通过（2026-10-24，122.8 秒）。
-- 浏览器回归：`npm run test:browser`，依次执行 smoke、acceptance、insights 三套脚本；insights 覆盖指标口径、柱形与趋势下钻、键盘操作、只读成员、三档宽度无横向溢出与 44×44 触控目标。
-- 持续集成：推送与 PR 触发 `Backend regression` 与 `Browser acceptance` 两个作业，均通过后方可合入。
+- 浏览器回归：`npm run test:browser`，依次执行 smoke、acceptance、interaction、insights 四套脚本；insights 覆盖指标口径、柱形与趋势下钻、键盘操作、只读成员、三档宽度无横向溢出与 44×44 触控目标。
+- 持续集成：推送与 PR 触发 `Backend regression`（Ubuntu）、`Backend regression (Windows)` 与 `Browser acceptance` 三个作业，全部通过后方可合入。

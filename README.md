@@ -45,7 +45,7 @@ python -m unittest discover -s tests -v
 - `index.html`、`app.js`、`styles.css`：浏览器界面。
 - `tests/`：业务、HTTP边界、接口契约、数据库迁移与健康检查测试；`.github/workflows/tests.yml`：推送与拉取请求触发的全量回归流水线。
 - `scripts/check_database.py`：只读数据库健康检查；`docs/business-api.md`：实际接口与业务约定。
-- `scripts/browser_smoke.mjs`、`scripts/browser_acceptance.mjs`与`scripts/interaction_acceptance.mjs`：业务流程、权限、筛选、键盘、移动端弹窗，以及防重复提交、折叠状态隔离和多行说明验收；`npm run test:browser`依次执行三者。
+- `scripts/browser_smoke.mjs`、`scripts/browser_acceptance.mjs`、`scripts/interaction_acceptance.mjs`与`scripts/browser_insights.mjs`：业务流程、权限、筛选、键盘、移动端弹窗，防重复提交、折叠状态隔离和多行说明验收，以及统计指标、图表下钻与变更留痕验收；`npm run test:browser`依次执行四者。
 
 本轮保留Sprint 1及Sprint 2累积提交历史。成员成果先在功能分支开发，再集中整合到`feature/liuhaotian-business`并执行回归；技术检查通过后同步到`main`，作为团队统一运行和交付的技术基线。合入主分支不代表课程验收已经签认：非作者差异审查、现场AC验收及真实签字仍须由团队完成，证据据实归档，不能用CI通过或AI检查替代。
 
@@ -61,7 +61,7 @@ python -m unittest discover -s tests -v
 
 ## 本次验证
 
-后端验证命令保持`python -m unittest discover -s tests -v`。当前全量测试包含138项，执行结果以当前提交的运行输出和CI为准。覆盖Sprint 1回归、Sprint 2需求任务链路、HTTP接口契约、权限边界、版本冲突、查询边界、旧库迁移、故障回滚、备份恢复、重启持久化、口令格式兼容升级、CSRF令牌校验与只读健康检查。请求入口还拒绝重复JSON字段、非法Unicode文本、非有限数值、过深嵌套、重复或非法Content-Length及不支持的Transfer-Encoding，相关回归验证拒绝后数据库不变。补充覆盖任务空更新、排序溢出、建库失败释放监听端口，以及新建表单防重复提交。HTTP测试使用显式直连的127.0.0.1客户端，不继承系统代理，避免本机代理的502或转发行为干扰安全边界断言。提前拒绝及过载响应采用半关闭写端后排空待接收数据的收尾方式，排空受0.2秒总截止时间及1 MiB读取上限约束；Windows与Ubuntu后端回归均纳入CI。
+后端验证命令保持`python -m unittest discover -s tests -v`。当前全量测试包含159项，执行结果以当前提交的运行输出和CI为准。覆盖Sprint 1回归、Sprint 2需求任务链路、Sprint 3统计口径与变更事件、HTTP接口契约、权限边界、版本冲突、查询边界、旧库迁移、故障回滚、备份恢复、重启持久化、口令格式兼容升级、CSRF令牌校验与只读健康检查。请求入口还拒绝重复JSON字段、非法Unicode文本、非有限数值、过深嵌套、重复或非法Content-Length及不支持的Transfer-Encoding，相关回归验证拒绝后数据库不变。补充覆盖任务空更新、排序溢出、建库失败释放监听端口，以及新建表单防重复提交。HTTP测试使用显式直连的127.0.0.1客户端，不继承系统代理，避免本机代理的502或转发行为干扰安全边界断言。提前拒绝及过载响应采用半关闭写端后排空待接收数据的收尾方式，排空受0.2秒总截止时间及1 MiB读取上限约束；Windows与Ubuntu后端回归均纳入CI。
 
 自动浏览器回归使用单独的临时数据库，不修改真实账号和任务：
 
