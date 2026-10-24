@@ -6,6 +6,8 @@
 
 发布信息：`v1.0.0` 标签指向通过全量回归的 `main` 提交；发布说明见 `docs/release-notes.md`，使用指南见 `docs/user-guide.md`，发布检查清单见 `docs/release-checklist.md`。
 
+实验四的代码范围从 `8b396fe`（含该提交）开始。本次工作台更新采用暖白与青绿配色、侧栏导航、全局项目切换和登录页蜂鸟纸艺插画；移动端可展开导航，数据概览可直接切换项目。明细总数按全部匹配任务计算，超过返回上限才标记截断；较早请求的延迟响应不会覆盖新点击的结果，退出后清空数据概览。实验三保留原交付基线。
+
 ## 运行
 
 建议使用 Python 3.11 或更高版本（CI使用3.11），服务端使用标准库，无需安装第三方包。浏览器回归需要Node.js与Playwright。在本目录运行：
@@ -35,17 +37,17 @@ python -m unittest discover -s tests -v
 - 保存含管理权限的角色时自动包含`project.view`，旧数据库启动时补齐这一依赖。创建者自动成为新项目的项目内管理者，可查看项目、管理成员与需求任务；该身份不授予平台级角色管理权。创建者显示在成员列表并可被指派任务，不能通过普通成员操作移除或覆盖；所有权转移暂不支持。旧项目不猜测创建者，保留平台管理员兜底。
 - 更新任务须携带读取时的`version`：缺失返回428、旧版本返回409，成功递增。拖动、状态选择和编辑窗口均遵守该约束。收到冲突时保留当前输入，请关闭弹窗、刷新数据后重新编辑，不自动覆盖别人修改。
 - 需求支持编辑、归档与恢复，使用自己的`version`，与任务版本独立；归档保留历史任务关联，禁止新关联，恢复后可重新关联。需求和任务不提供永久删除入口。
-- 当前为教学原型，监听本机地址；虽有登录失败限速、线程上限和请求读取超时，但不包含生产部署所需的 TLS、完整流量治理、账号找回、审计日志与跨设备会话持久化。
+- 当前为教学原型，监听本机地址；已有项目任务、需求及成员事件留痕，但不包含生产部署所需的 TLS、完整流量治理、账号找回、平台级完整审计与跨设备会话持久化。
 - 自动测试通过只能证明代码级 DoD 的一部分；团队仍须完成非作者审查、现场 AC 验收、截图/录屏和真实会议签认后，才能把故事标记为正式完成。
 
 ## 文件
 
 - `server.py`：HTTP 路由与安全边界。
 - `service.py`：用户、权限、需求与任务业务规则；`database.py`：SQLite连接、原子升级、备份与索引。
-- `index.html`、`app.js`、`styles.css`：浏览器界面。
+- `index.html`、`app.js`、`styles.css`、`workspace.css`：浏览器界面与工作台布局；`assets/hummingbird.png`：登录页纸艺插画。
 - `tests/`：业务、HTTP边界、接口契约、数据库迁移与健康检查测试；`.github/workflows/tests.yml`：推送与拉取请求触发的全量回归流水线。
 - `scripts/check_database.py`：只读数据库健康检查；`docs/business-api.md`：实际接口与业务约定。
-- `scripts/browser_smoke.mjs`、`scripts/browser_acceptance.mjs`、`scripts/interaction_acceptance.mjs`与`scripts/browser_insights.mjs`：业务流程、权限、筛选、键盘、移动端弹窗，防重复提交、折叠状态隔离和多行说明验收，以及统计指标、图表下钻与变更留痕验收；`npm run test:browser`依次执行四者。
+- `scripts/browser_smoke.mjs`、`scripts/browser_acceptance.mjs`、`scripts/interaction_acceptance.mjs`、`scripts/browser_insights.mjs`与`scripts/browser_workspace.mjs`：覆盖业务流程、权限、筛选、键盘、移动端弹窗、防重复提交、统计下钻、跨视图项目切换和延迟响应回归；`npm run test:browser`依次执行五者。工作台脚本将桌面与手机截图保存到被忽略的 `test-results/workspace/`。
 
 本轮保留Sprint 1及Sprint 2累积提交历史。成员成果先在功能分支开发，再集中整合到`feature/liuhaotian-business`并执行回归；技术检查通过后同步到`main`，作为团队统一运行和交付的技术基线。合入主分支不代表课程验收已经签认：非作者差异审查、现场AC验收及真实签字仍须由团队完成，证据据实归档，不能用CI通过或AI检查替代。
 

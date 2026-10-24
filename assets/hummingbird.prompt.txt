@@ -1,0 +1,4 @@
+用途：爱管理登录页纸艺蜂鸟插画。
+生成方式：内置 imagegen，2026-10-24。未使用参考图片。
+原始提示词：
+Use case: stylized-concept. Asset type: editorial illustration for the login side panel of 爱管理, a small-team project management web app, internal codename hummingbird. Create a sophisticated quiet tactile paper sculpture still life: a delicate teal hummingbird hovering above three ivory folded paper cards arranged as steps, with a tiny muted ochre paper tab. Warm off-white matte background, soft daylight and natural subtle shadows. Close-up physical paper craft photographed beautifully, restrained and calm, professional collaboration symbolism, generous negative space upper half for separate HTML heading. Portrait composition approximately 4:5. Palette warm ivory #f5f4ef, deep teal #236b60, graphite, small ochre. No text, no letters, no numbers, no logos, no watermark, no emoji, no cartoon face, no UI screenshot, no gradient background.

@@ -113,6 +113,10 @@ class StatsTests(unittest.TestCase):
                                            self.admin['id'], 'todo')
         self.backlog = self.store.create_task(project_id, 'Backlog', None, None, None,
                                               self.admin['id'], 'backlog')
+        # 固定事件日期，使历史趋势断言不依赖测试执行当天或 CI 时区。
+        self.store.db.execute('UPDATE audit_events SET created_at=? WHERE project_id=?',
+                              (f'{self.today.isoformat()} 12:00:00', project_id))
+        self.store.db.commit()
         return requirement
 
     def test_empty_project_is_zeroed(self):
@@ -203,6 +207,25 @@ class StatsTests(unittest.TestCase):
         self.store.create_task(other['id'], 'Foreign', None, None, None, self.admin['id'], 'todo')
         self.assertEqual(self.store.drilldown_tasks(self.project['id'], 'status', 'todo')['total'], 1)
         self.assertEqual(self.store.drilldown_tasks(other['id'], 'status', 'todo')['total'], 1)
+
+    def test_drilldown_total_is_not_the_page_size(self):
+        self.build()
+        result = self.store.drilldown_tasks(self.project['id'], 'assignee', 'unassigned', limit=1)
+        self.assertEqual(result['total'], 2)
+        self.assertEqual(len(result['items']), 1)
+        self.assertTrue(result['truncated'])
+
+    def test_drilldown_exact_limit_is_not_truncated(self):
+        self.build()
+        result = self.store.drilldown_tasks(self.project['id'], 'status', 'todo', limit=1)
+        self.assertEqual(result['total'], 1)
+        self.assertFalse(result['truncated'])
+
+    def test_drilldown_empty_result_is_not_truncated(self):
+        result = self.store.drilldown_tasks(self.project['id'], 'status', 'todo', limit=1)
+        self.assertEqual(result['total'], 0)
+        self.assertEqual(result['items'], [])
+        self.assertFalse(result['truncated'])
 
 
 class MigrationTests(unittest.TestCase):

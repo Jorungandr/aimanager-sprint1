@@ -813,11 +813,13 @@ class Store:
             params.extend([today.isoformat(), (today + timedelta(days=3)).isoformat()])
         else:
             raise AppError('下钻维度不合法。')
+        where = ' AND '.join(clauses)
+        total = self.db.execute('SELECT COUNT(*) FROM tasks t WHERE ' + where, params).fetchone()[0]
         rows = self.db.execute('''SELECT t.id,t.title,t.status,t.due_date,t.assignee_user_id,
                 u.email AS assignee_email,t.requirement_id
             FROM tasks t LEFT JOIN users u ON u.id=t.assignee_user_id
-            WHERE ''' + ' AND '.join(clauses) + ' ORDER BY t.status,t.due_date,t.id LIMIT ?',
+            WHERE ''' + where + ' ORDER BY t.status,t.due_date,t.id LIMIT ?',
             [*params, limit]).fetchall()
         return {'dimension': dimension, 'value': value,
-                'items': [dict(row) for row in rows], 'total': len(rows),
-                'truncated': len(rows) == limit}
+                'items': [dict(row) for row in rows], 'total': total,
+                'truncated': total > len(rows)}

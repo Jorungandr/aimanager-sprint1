@@ -237,6 +237,12 @@ async function main() {
     await check('三档宽度下数据概览不产生页面横向溢出', async () => {
         for (const [width, height] of [[1440, 900], [768, 1024], [390, 844]]) {
             await page.setViewportSize({ width, height });
+            const navigation = page.locator('#navToggle');
+            if (await navigation.isVisible()) {
+                assert.equal(await navigation.getAttribute('aria-expanded'), 'false');
+                await navigation.click();
+                assert.equal(await navigation.getAttribute('aria-expanded'), 'true');
+            }
             await page.getByRole('button', { name: '数据概览', exact: true }).click();
             await page.locator('#insightsPanel .kpi-value').first().waitFor();
             const auditResult = await page.evaluate(() => {
@@ -272,7 +278,11 @@ async function main() {
     });
 
     if (browser) await browser.close();
-    if (server.exitCode === null) server.kill();
+    if (server.exitCode === null) {
+        const exited = new Promise(resolve => server.once('exit', resolve));
+        server.kill();
+        await exited;
+    }
     if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true });
 
     if (failures.length) {
@@ -286,7 +296,11 @@ async function main() {
 main().catch(async error => {
     console.error(error);
     if (browser) await browser.close();
-    if (server && server.exitCode === null) server.kill();
+    if (server && server.exitCode === null) {
+        const exited = new Promise(resolve => server.once('exit', resolve));
+        server.kill();
+        await exited;
+    }
     if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true });
     process.exitCode = 1;
 });

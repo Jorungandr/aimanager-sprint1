@@ -4,10 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <meta name="theme-color" content="#1f6a83">
+  <meta name="theme-color" content="#236b60">
   <meta name="description" content="爱管理：面向 5—15 人小团队的轻量项目协作原型，覆盖需求、任务、负责人、截止日与看板流转。">
   <title>爱管理 · Sprint 3</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="workspace.css">
 </head>
 <body>
 <a class="skip-link" href="#workspace">跳到主内容</a>
@@ -15,9 +16,9 @@
 <div class="shell">
   <header class="topbar">
     <div class="brand">
-      <p class="eyebrow">爱管理 · Sprint 3 发布增量</p>
-      <h1>权限、协作与数据概览</h1>
-      <p class="sub">创建需求和任务、指派负责人并在看板中推进状态，再从数据概览核对完成率、分布与变更记录。</p>
+      <a class="wordmark" href="/" aria-label="爱管理首页"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 23 12 7l4 10L28 9 17 27l-1-10Z"/></svg>爱管理</a>
+      <h1 id="pageTitle">让团队协作，有条不紊。</h1>
+      <p class="sub" id="pageDescription">把需求、任务和进展，放在一个清晰的工作空间。</p>
     </div>
     <div class="topbar-actions">
       <button id="logout" class="secondary" type="button" hidden>退出登录</button>
@@ -26,6 +27,13 @@
 
   <p id="notice" role="status" aria-live="polite"></p>
 
+  <div id="authLayout" class="auth-layout" hidden>
+    <aside class="auth-art" aria-label="蜂鸟主题纸艺插画">
+      <img src="assets/hummingbird.png" alt="青绿色纸艺蜂鸟飞过层叠的纸卡" width="1122" height="1402" fetchpriority="high">
+      <div class="auth-art-copy"><h2>每一小步，<br>都向前一步。</h2><p>从一条需求，到一次顺畅的交付。</p></div>
+      <span class="auth-art-caption">爱管理 · 小团队的协作空间</span>
+    </aside>
+    <div class="auth-forms">
   <section id="setupPanel" class="panel auth-panel" hidden>
     <h2>初始化管理员</h2>
     <p class="panel-lead">首次使用时创建平台管理员账号。本页面仅用于课程演示，请使用虚构的邮箱与口令，不要输入真实凭证。</p>
@@ -44,7 +52,7 @@
 
   <section id="loginPanel" class="panel auth-panel" hidden>
     <h2>登录工作空间</h2>
-    <p class="panel-lead">使用团队分配的演示账号登录。连续 1 分钟内失败 5 次会暂时返回 429，稍后重试即可。</p>
+    <p class="panel-lead">登录团队账号，继续推进项目。</p>
     <form id="loginForm">
       <label>邮箱
         <input name="email" type="email" maxlength="120" required autocomplete="username" inputmode="email" placeholder="demo@example.com">
@@ -52,36 +60,42 @@
       <label>密码
         <input name="password" type="password" maxlength="128" required autocomplete="current-password" placeholder="演示口令">
       </label>
-      <p class="hint">登录会话保存在服务器进程内，约 2 小时后或服务重启后需要重新登录。</p>
+      <p class="hint">会话约 2 小时后或服务重启后需要重新登录。连续登录失败时，请稍后重试。</p>
       <button type="submit">登录</button>
     </form>
   </section>
+    </div>
+  </div>
 
   <main id="workspace" hidden>
     <nav class="workspace-nav" aria-label="工作区导航">
-      <div class="workspace-tabs" role="group" aria-label="切换视图">
-        <button type="button" data-view="collaboration" aria-pressed="true">项目协作</button>
-        <button type="button" data-view="insights" aria-pressed="false">数据概览</button>
-        <button type="button" data-view="administration" aria-pressed="false">管理配置</button>
-        <button type="button" data-view="verification" aria-pressed="false">权限验证</button>
+      <a class="wordmark sidebar-brand" href="/" aria-label="爱管理首页"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 23 12 7l4 10L28 9 17 27l-1-10Z"/></svg>爱管理</a>
+      <div class="workspace-identity"><span class="team-avatar">T</span><div><strong>团队工作空间</strong><span>Sprint 3 · 实验四</span></div></div>
+      <button type="button" id="navToggle" class="secondary" aria-expanded="false" aria-controls="workspaceTabs">展开导航</button>
+      <div class="workspace-tabs" id="workspaceTabs" role="group" aria-label="切换视图">
+        <button type="button" data-view="collaboration" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16m6-16v16"/></svg>项目协作</button>
+        <button type="button" data-view="insights" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3v17h17M8 15v-4m5 4V7m5 8v-6"/></svg>数据概览</button>
+        <button type="button" data-view="administration" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg>管理配置</button>
+        <button type="button" data-view="verification" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 3v6c0 4-5 8-8 9-3-1-8-5-8-9V6Z"/><path d="m8 12 3 3 5-6"/></svg>权限验证</button>
       </div>
-      <button type="button" id="refreshWorkspace" class="secondary">刷新数据</button>
+      <div class="sidebar-bottom"><div class="account-info"><span class="account-avatar" aria-hidden="true">L</span><div><span>当前账号</span><strong id="currentUser">—</strong></div></div><p>清晰分工，稳步交付。</p></div>
     </nav>
 
     <section class="summary" aria-label="工作区概览">
-      <div><span>当前账号</span><strong id="currentUser">—</strong></div>
-      <div><span>可访问项目</span><strong id="projectCount">0</strong></div>
-      <div><span>可用角色</span><strong id="roleCount">0</strong></div>
+      <label class="project-picker">当前项目<select id="projectPicker" aria-describedby="pickerHint"><option value="">暂无项目</option></select></label>
+      <div class="workspace-count"><strong id="projectCount">0</strong><span>可访问项目</span></div>
+      <div class="workspace-count"><strong id="roleCount">0</strong><span>可用角色</span></div>
+      <button type="button" id="refreshWorkspace" class="secondary"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1"/></svg>刷新数据</button>
     </section>
+    <p class="hint" id="pickerHint">成员、需求、看板与数据概览均跟随当前项目。</p>
 
     <section id="adminPanel" class="panel" hidden>
       <div class="panel-heading">
         <div>
-          <p class="eyebrow">ADMINISTRATION</p>
           <h2>管理配置</h2>
         </div>
       </div>
-      <p class="panel-lead">建议顺序：先建角色并勾选权限，再建演示账号与项目。界面会按当前账号隐藏无权操作的入口，但真正的权限判断全部在服务器端执行。</p>
+      <p class="panel-lead">配置角色与权限，创建团队账号和项目。建议先完成角色设置，再邀请成员参与协作。</p>
       <div class="form-grid">
         <form id="roleForm" hidden>
           <h3>创建角色</h3>
@@ -142,33 +156,26 @@
     <section class="panel" id="collaborationPanel">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">PROJECT WORKSPACE</p>
           <h2>项目工作区</h2>
         </div>
-        <label class="project-picker">当前项目
-          <select id="projectPicker" aria-describedby="pickerHint"><option value="">暂无项目</option></select>
-        </label>
       </div>
-      <p class="hint" id="pickerHint">切换项目后，成员、需求与看板会同步刷新；页面只显示当前项目的数据，跨项目内容不会混入。</p>
       <div id="projects"></div>
     </section>
 
     <section id="insightsPanel" class="panel" hidden>
       <div class="section-heading">
         <div>
-          <p class="eyebrow">PROJECT INSIGHTS</p>
           <h2>数据概览</h2>
         </div>
         <p class="scope-note" id="insightScope">当前项目：—</p>
       </div>
-      <p class="panel-lead">统计范围跟随上方“当前项目”。数字来自任务表与变更事件表，图表、卡片与下钻明细使用同一份数据；只读成员也能查看，但不能修改任务。</p>
+      <p class="panel-lead">关注当前项目的交付进度、任务分布与到期风险。选择指标或图表，可查看对应任务。</p>
       <div id="insightBody" aria-live="polite"></div>
     </section>
 
     <section id="checkPanel" class="panel">
       <div class="panel-heading">
         <div>
-          <p class="eyebrow">ACCESS CHECK</p>
           <h2>权限验证</h2>
         </div>
       </div>
@@ -182,7 +189,7 @@
     </section>
   </main>
 
-  <footer>教学演示原型 · Sprint 1 权限基线 + Sprint 2 协作增量 + Sprint 3 数据概览 · 服务器执行权限校验</footer>
+  <footer>爱管理 · 团队协作工作台 · Sprint 3</footer>
 </div>
 
 <dialog id="taskDialog" aria-labelledby="taskDialogTitle">
