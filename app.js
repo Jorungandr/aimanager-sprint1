@@ -325,10 +325,113 @@ async function renderProjects() {
       }
       renderMembers(card, project, members, canManageMembers, assignableRoles);
       renderWorkItems(card, project, members, requirements, tasks, canManageWorkitems);
+      renderProjectIntroduction(card, project, members, requirements, tasks, canManageWorkitems);
     } catch (error) {
       const problem = document.createElement('p'); problem.className = 'error'; problem.textContent = error.message; card.append(problem);
     }
   }
+}
+function localDay(value) {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+}
+function renderProjectIntroduction(card, project, members, requirements, tasks, canManage) {
+    const completed = tasks.filter(task => task.status === 'done').length;
+    const remaining = tasks.filter(task => task.status !== 'done');
+    const today = new Date();
+    const near = new Date(today);
+    near.setDate(near.getDate() + 3);
+    const todayKey = localDay(today);
+    const risks = remaining.filter(task => task.due_date && task.due_date <= localDay(near));
+    const candidates = risks.length ? risks : remaining;
+    const queue = [...candidates].sort((first, second) => {
+        const firstRank = first.status === 'doing' ? 0 : 1;
+        const secondRank = second.status === 'doing' ? 0 : 1;
+        return (first.due_date || '9999').localeCompare(second.due_date || '9999')
+            || firstRank - secondRank || first.id - second.id;
+    }).slice(0, 3);
+    const introduction = el('div', 'workspace-introduction');
+    const hero = el('section', 'project-hero');
+    hero.setAttribute('aria-label', '项目进度概览');
+    const art = el('img', 'project-hero-art');
+    art.src = 'assets/workspace-hummingbird.png';
+    art.alt = '';
+    art.width = 2172;
+    art.height = 724;
+    const content = el('div', 'project-hero-content');
+    const title = card.querySelector(':scope > h3');
+    content.append(title);
+    const message = !tasks.length ? '从第一条任务开始，让想法逐步成为交付。'
+        : (remaining.length ? `${remaining.length} 项任务正在等待推进，每一步协作都有迹可循。`
+            : '本轮任务已全部完成，准备迎接下一次交付。');
+    content.append(el('p', 'project-hero-message', message));
+    const action = el('button', 'hero-action', canManage ? '新建任务' : '查看项目进展');
+    action.type = 'button';
+    action.addEventListener('click', () => {
+        if (canManage) {
+            const form = card.querySelector('[data-create-task]');
+            const details = form.closest('details');
+            details.open = true;
+            recordPanel(project.id, 'create', true);
+            form.querySelector('[name="title"]').focus();
+        } else {
+            setView('insights');
+            renderInsights().catch(error => say(error.message, true));
+        }
+    });
+    content.append(action);
+    const pulse = el('div', 'project-pulse');
+    const percent = tasks.length ? Math.round(completed * 100 / tasks.length) : 0;
+    const completion = el('div', 'pulse-completion');
+    completion.append(el('strong', null, `${percent}%`), el('span', null, '任务完成率'));
+    pulse.append(completion, card.querySelector('.progress-summary'));
+    const people = el('div', 'pulse-team');
+    people.append(el('strong', null, `${members.length} 人协作`),
+        el('span', null, `${requirements.filter(item => !item.archived).length} 条活跃需求`));
+    pulse.append(people);
+    hero.append(art, content, pulse);
+    const focus = el('aside', 'project-focus');
+    focus.setAttribute('aria-label', '项目关注事项');
+    const focusHeading = el('div', 'focus-heading');
+    focusHeading.append(el('h4', null, risks.length ? '需要关注' : '下一步任务'),
+        el('span', 'focus-count', `${risks.length || remaining.length} 项`));
+    focus.append(focusHeading);
+    const overdue = risks.filter(task => task.due_date < todayKey).length;
+    focus.append(el('p', 'focus-description', risks.length
+        ? `${overdue} 项逾期 · ${risks.length - overdue} 项在 3 天内到期`
+        : (remaining.length ? '为正在推进的工作，留出专注时间。' : '当前任务均已完成，可以准备下一轮计划。')));
+    const list = el('div', 'focus-task-list');
+    for (const task of queue) {
+        const text = `${task.title} · ${task.due_date || statusLabels[task.status]}`;
+        const button = el('button', 'focus-task', text);
+        button.type = 'button';
+        button.title = text;
+        button.classList.toggle('is-overdue', Boolean(task.due_date && task.due_date < todayKey));
+        button.addEventListener('click', () => {
+            if (canManage) {
+                openTaskEditor(project, task, members, requirements);
+                return;
+            }
+            const state = filters.get(project.id);
+            state.search = task.title;
+            state.assignee = '';
+            renderProjects().then(() => {
+                $('projects').querySelector('.board')?.scrollIntoView({ block: 'start' });
+            }).catch(error => say(error.message, true));
+        });
+        list.append(button);
+    }
+    if (!queue.length) {
+        list.append(el('p', 'focus-empty', tasks.length ? '本轮任务已全部完成。' : '创建任务后，这里会显示待推进事项。'));
+    }
+    const more = el('button', 'focus-more', '查看完整数据概览');
+    more.type = 'button';
+    more.addEventListener('click', () => {
+        setView('insights');
+        renderInsights().catch(error => say(error.message, true));
+    });
+    focus.append(list, more);
+    introduction.append(hero, focus);
+    card.prepend(introduction);
 }
 function renderMembers(card, project, members, canManage, assignableRoles) {
   const details = document.createElement('details');
@@ -477,7 +580,7 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
     const forms = document.createElement('div'); forms.className = 'workitem-forms';
     const requirementForm = document.createElement('form'); requirementForm.innerHTML = '<h5>新增需求</h5><label>标题<input name="title" maxlength="80" required></label><label>说明<textarea name="description" maxlength="500" rows="3" placeholder="可选；说明背景、边界或验收要点"></textarea></label><button>保存需求</button>';
     requirementForm.addEventListener('submit', event => { event.preventDefault(); submit(requirementForm, `/api/projects/${project.id}/requirements`, refresh); });
-    const taskForm = document.createElement('form'); const taskTitle = document.createElement('h5'); taskTitle.textContent = '新增任务'; taskForm.append(taskTitle);
+    const taskForm = document.createElement('form'); taskForm.dataset.createTask = ''; const taskTitle = document.createElement('h5'); taskTitle.textContent = '新增任务'; taskForm.append(taskTitle);
     const titleLabel = document.createElement('label'); titleLabel.textContent = '标题'; const titleInput = document.createElement('input'); titleInput.name = 'title'; titleInput.maxLength = 100; titleInput.required = true; titleLabel.append(titleInput); taskForm.append(titleLabel);
     const requirementLabel = document.createElement('label'); requirementLabel.textContent = '关联需求'; const requirementSelect = document.createElement('select'); requirementSelect.name = 'requirement_id'; requirementSelect.append(option('', '不关联')); openRequirements.forEach(item => requirementSelect.append(option(item.id, item.title))); requirementLabel.append(requirementSelect); taskForm.append(requirementLabel);
     // 归档需求不进入新任务选项；全部归档时说明原因（不加占位 option，避免被误当成可选项）
@@ -580,8 +683,12 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
     }
     for (const task of visible.filter(item => item.status === status)) {
       const item = document.createElement('article'); item.className = 'task-card'; item.draggable = canManage; item.addEventListener('dragstart', event => event.dataTransfer.setData('text/plain', task.id));
+      item.dataset.taskNumber = `任务 #${task.id}`;
+      item.dataset.status = status;
       const name = document.createElement('strong'); name.textContent = task.title; item.append(name);
       const meta = document.createElement('span'); meta.textContent = `${task.assignee_email || '未指派'}${task.due_date ? ` · ${task.due_date}` : ''}`; item.append(meta); column.append(item);
+      meta.className = 'task-person';
+      meta.dataset.initial = task.assignee_email ? task.assignee_email.slice(0, 1).toUpperCase() : '未';
       const requirement = requirements.find(entry => entry.id === task.requirement_id);
       if (requirement) {
         const tag = document.createElement('span');

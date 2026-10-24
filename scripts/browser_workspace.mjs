@@ -86,7 +86,20 @@ try {
     }
     await page.reload();
     await page.locator('.task-card').first().waitFor();
+    if (!process.env.CAPTURE_ONLY) {
+        await page.locator('.project-hero-art').evaluate(image => image.decode());
+        assert.equal(await page.locator('.pulse-completion strong').innerText(), '25%');
+        await page.getByRole('button', { name: '新建任务', exact: true }).click();
+        assert.equal(await page.locator('[data-create-task] input[name="title"]').evaluate(
+            element => element === document.activeElement), true);
+        const createPanel = page.locator('.project details').filter({ has: page.locator('[data-create-task]') });
+        await createPanel.locator('summary').click();
+        await page.locator('.focus-task').first().click();
+        await page.locator('#taskDialog').waitFor({ state: 'visible' });
+        await page.locator('#closeTaskDialog').click();
+    }
     await page.screenshot({ path: path.join(output, 'board-desktop.png'), fullPage: true });
+    await page.locator('.project-hero').screenshot({ path: path.join(output, 'project-cover.png') });
     await page.locator('[data-view="insights"]').click();
     await page.locator('.kpi-value').first().waitFor();
     await page.screenshot({ path: path.join(output, 'insights-desktop.png'), fullPage: true });
@@ -143,6 +156,7 @@ try {
         assert.equal(await page.locator('#navToggle').getAttribute('aria-expanded'), 'false');
         await page.locator('.task-card').first().waitFor();
         await page.screenshot({ path: path.join(output, 'board-mobile.png'), fullPage: true });
+        await page.locator('.project-hero').screenshot({ path: path.join(output, 'project-cover-mobile.png') });
         await page.locator('#logout').click();
         await page.locator('#loginPanel').waitFor({ state: 'visible' });
         assert.equal(await page.locator('#insightBody > *').count(), 0,
