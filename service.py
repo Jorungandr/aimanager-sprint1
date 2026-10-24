@@ -1,5 +1,5 @@
-"""Sprint 1 权限基线与 Sprint 2 协作增量。查询统一使用参数绑定。"""
-from datetime import date
+"""Sprint 1 权限基线、Sprint 2 协作增量与 Sprint 3 统计追溯。查询统一使用参数绑定。"""
+from datetime import date, datetime, timedelta
 import hashlib
 import hmac
 import os
@@ -34,6 +34,58 @@ class Store:
 
     def _one(self, sql, params=()):
         return self.db.execute(sql, params).fetchone()
+
+    # ---------- 变更事件：任务、需求与成员角色的统一追溯链 ----------
+    @staticmethod
+    def _event_value(value):
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return '1' if value else '0'
+        return str(value)
+
+    def _record_event(self, project_id, entity_type, entity_id, action,
+                      field=None, before=None, after=None, actor=None):
+        """在写事务内登记一条变更；调用方负责事务边界。"""
+        self.db.execute('''INSERT INTO audit_events(
+            project_id,entity_type,entity_id,action,field,from_value,to_value,actor_user_id)
+            VALUES(?,?,?,?,?,?,?,?)''',
+            (project_id, entity_type, entity_id, action, field,
+             self._event_value(before), self._event_value(after), actor))
+
+    def _record_task_changes(self, current, updated, actor):
+        for field in ('title', 'requirement_id', 'assignee_user_id', 'due_date', 'status', 'position'):
+            before, after = current.get(field), updated.get(field)
+            if before != after:
+                self._record_event(current['project_id'], 'task', current['id'], 'update',
+                                   field, before, after, actor)
+
+    def list_audit(self, project_id, entity_type=None, entity_id=None, limit=20):
+        """按项目读取变更记录；只读接口，调用方须先校验 project.view。"""
+        project_id = self._integer(project_id, '项目编号')
+        self._project_exists(project_id)
+        if entity_type is not None and entity_type not in ('task', 'requirement', 'membership'):
+            raise AppError('变更对象类型不合法。')
+        limit = self._integer(limit, '返回条数', minimum=1)
+        if limit > 100:
+            raise AppError('单次最多返回 100 条变更记录。')
+        clauses, params = ['e.project_id=?'], [project_id]
+        if entity_type is not None:
+            clauses.append('e.entity_type=?')
+            params.append(entity_type)
+        if entity_id is not None:
+            clauses.append('e.entity_id=?')
+            params.append(self._integer(entity_id, '对象编号'))
+        rows = self.db.execute('''SELECT e.id,e.entity_type,e.entity_id,e.action,e.field,
+                e.from_value,e.to_value,e.created_at,u.email AS actor_email,
+                COALESCE(t.title,r.title,mu.email) AS entity_label
+            FROM audit_events e LEFT JOIN users u ON u.id=e.actor_user_id
+            LEFT JOIN tasks t ON e.entity_type='task' AND t.id=e.entity_id
+            LEFT JOIN requirements r ON e.entity_type='requirement' AND r.id=e.entity_id
+            LEFT JOIN users mu ON e.entity_type='membership' AND mu.id=e.entity_id
+            WHERE ''' + ' AND '.join(clauses) + ' ORDER BY e.id DESC LIMIT ?',
+            [*params, limit]).fetchall()
+        return [dict(row) for row in rows]
 
     def needs_setup(self):
         return self._one('SELECT COUNT(*) AS n FROM users')['n'] == 0
@@ -261,10 +313,19 @@ class Store:
             raise AppError('用户不存在。', 404)
         if not self._one('SELECT id FROM roles WHERE id=?', (role_id,)):
             raise AppError('角色不存在。', 404)
+        previous = self._one('SELECT role_id FROM memberships WHERE project_id=? AND user_id=?',
+                             (project_id, user_id))
+        actor_id = actor['id'] if actor else None
         with self.db:
             self.db.execute('''INSERT INTO memberships(project_id,user_id,role_id) VALUES(?,?,?)
                 ON CONFLICT(project_id,user_id) DO UPDATE SET role_id=excluded.role_id''',
                 (project_id, user_id, role_id))
+            if previous is None:
+                self._record_event(project_id, 'membership', user_id, 'create',
+                                   'role_id', None, role_id, actor_id)
+            elif previous['role_id'] != role_id:
+                self._record_event(project_id, 'membership', user_id, 'update',
+                                   'role_id', previous['role_id'], role_id, actor_id)
 
     def list_members(self, project_id):
         return [dict(row) for row in self.db.execute('''SELECT u.id AS user_id,u.email,r.name AS role_name,0 AS is_owner
@@ -276,9 +337,10 @@ class Store:
     def remove_member(self, project_id, user_id, actor=None):
         if self.is_owner(project_id, user_id):
             raise AppError('不能移除项目创建者，请保留项目管理入口。', 409)
+        current = self._one('SELECT role_id FROM memberships WHERE project_id=? AND user_id=?',
+                            (project_id, user_id))
         if actor is not None:
             allowed = {role['id'] for role in self.assignable_roles(actor, project_id)}
-            current = self._one('SELECT role_id FROM memberships WHERE project_id=? AND user_id=?', (project_id, user_id))
             if current and current['role_id'] not in allowed:
                 raise AppError('不能移除高于本人授权范围的成员。', 403)
         with self.db:
@@ -288,6 +350,9 @@ class Store:
             if cur.rowcount:
                 self.db.execute('UPDATE tasks SET assignee_user_id=NULL,version=version+1 WHERE project_id=? AND assignee_user_id=?',
                                 (project_id, user_id))
+                self._record_event(project_id, 'membership', user_id, 'remove', 'role_id',
+                                   current['role_id'] if current else None, None,
+                                   actor['id'] if actor else None)
         if not cur.rowcount:
             raise AppError('成员关系不存在。', 404)
     def _project_exists(self, project_id):
@@ -356,6 +421,8 @@ class Store:
         with self.db:
             cur = self.db.execute('''INSERT INTO requirements(project_id,title,description,created_by)
                 VALUES(?,?,?,?)''', (project_id, title, description, created_by))
+            self._record_event(project_id, 'requirement', cur.lastrowid, 'create',
+                               'title', None, title, created_by)
         return self.get_requirement(project_id, cur.lastrowid)
 
     def get_requirement(self, project_id, requirement_id):
@@ -376,7 +443,8 @@ class Store:
             raise AppError('需求已被其他操作修改，请刷新后重试。', 409)
         return version
 
-    def _save_requirement(self, current, version, title, description, archived):
+    def _save_requirement(self, current, version, title, description, archived,
+                          action='update', actor=None):
         # Compare-and-swap guards edits and archive operations across connections.
         with self.db:
             result = self.db.execute('''UPDATE requirements SET title=?,description=?,archived=?,version=version+1
@@ -384,9 +452,18 @@ class Store:
                 (title, description, int(archived), current['project_id'], current['id'], version))
             if result.rowcount != 1:
                 raise AppError('需求已被其他操作修改，请刷新后重试。', 409)
+            if action == 'update':
+                for field, before, after in (('title', current['title'], title),
+                                             ('description', current['description'], description)):
+                    if before != after:
+                        self._record_event(current['project_id'], 'requirement', current['id'],
+                                           'update', field, before, after, actor)
+            else:
+                self._record_event(current['project_id'], 'requirement', current['id'],
+                                   action, 'archived', current['archived'], archived, actor)
         return self.get_requirement(current['project_id'], current['id'])
 
-    def update_requirement(self, project_id, requirement_id, changes):
+    def update_requirement(self, project_id, requirement_id, changes, actor=None):
         """Edit title/description with version. API callers must check workitems.manage."""
         current = self.get_requirement(project_id, requirement_id)
         if not isinstance(changes, dict) or any(key not in {'title', 'description', 'version'} for key in changes):
@@ -398,22 +475,23 @@ class Store:
             raise AppError('归档需求不能编辑，请先恢复。', 409)
         title = self._short_text(changes.get('title', current['title']), '需求标题', 80)
         description = self._requirement_description(changes.get('description', current['description']))
-        return self._save_requirement(current, version, title, description, False)
+        return self._save_requirement(current, version, title, description, False, actor=actor)
 
-    def _set_requirement_archived(self, project_id, requirement_id, version, archived):
+    def _set_requirement_archived(self, project_id, requirement_id, version, archived, actor=None):
         current = self.get_requirement(project_id, requirement_id)
         version = self._requirement_version(current, version)
         if current['archived'] == archived:
             return current
-        return self._save_requirement(current, version, current['title'], current['description'], archived)
+        return self._save_requirement(current, version, current['title'], current['description'], archived,
+                                      action='archive' if archived else 'restore', actor=actor)
 
-    def archive_requirement(self, project_id, requirement_id, version=None):
+    def archive_requirement(self, project_id, requirement_id, version=None, actor=None):
         """Archive without deleting linked tasks; a matching repeated call is a no-op."""
-        return self._set_requirement_archived(project_id, requirement_id, version, True)
+        return self._set_requirement_archived(project_id, requirement_id, version, True, actor)
 
-    def restore_requirement(self, project_id, requirement_id, version=None):
+    def restore_requirement(self, project_id, requirement_id, version=None, actor=None):
         """Restore an archived requirement, checking the same optimistic version."""
-        return self._set_requirement_archived(project_id, requirement_id, version, False)
+        return self._set_requirement_archived(project_id, requirement_id, version, False, actor)
 
     def _requirement_link(self, project_id, requirement_id, previous_id=None):
         if isinstance(requirement_id, bool) or isinstance(requirement_id, float):
@@ -521,6 +599,8 @@ class Store:
                  status, position, created_by, requirement_id, requirement_id, project_id))
             if cur.rowcount != 1:
                 raise AppError('关联需求已发生变化，请刷新后重试。', 409)
+            self._record_event(project_id, 'task', cur.lastrowid, 'create',
+                               'status', None, status, created_by)
         return self.get_task(project_id, cur.lastrowid)
 
     def get_task(self, project_id, task_id):
@@ -533,7 +613,7 @@ class Store:
             raise AppError('任务不存在或不属于当前项目。', 404)
         return dict(row)
 
-    def update_task(self, project_id, task_id, changes):
+    def update_task(self, project_id, task_id, changes, actor=None):
         current = self.get_task(project_id, task_id)
         allowed = {'title', 'requirement_id', 'assignee_user_id', 'due_date', 'status', 'position', 'version'}
         if not isinstance(changes, dict) or not changes or any(key not in allowed for key in changes):
@@ -567,4 +647,177 @@ class Store:
                  position, project_id, task_id, version, requirement_id, requirement_id, requirement_id, project_id))
             if result.rowcount != 1:
                 raise AppError('任务已被其他操作修改，请刷新后重新编辑。', 409)
+            self._record_task_changes(current, {
+                'project_id': project_id, 'id': task_id, 'title': values['title'],
+                'requirement_id': requirement_id, 'assignee_user_id': assignee,
+                'due_date': due_date, 'status': values['status'], 'position': position}, actor)
         return self.get_task(project_id, task_id)
+
+    # ---------- Sprint 3 项目统计、风险清单与下钻 ----------
+    def _project_tasks(self, project_id):
+        return self.db.execute('''SELECT t.id,t.title,t.status,t.due_date,t.assignee_user_id,
+                u.email AS assignee_email,t.requirement_id
+            FROM tasks t LEFT JOIN users u ON u.id=t.assignee_user_id
+            WHERE t.project_id=? ORDER BY t.id''', (project_id,)).fetchall()
+
+    def project_stats(self, project_id, days=14, today=None):
+        """汇总当前项目的任务健康度；数字口径见 README「统计口径」。"""
+        project_id = self._integer(project_id, '项目编号')
+        self._project_exists(project_id)
+        days = self._integer(days, '统计天数')
+        if days > 90:
+            raise AppError('统计天数不得超过 90 天。')
+        today = self._stats_today(today)
+        today_text = today.isoformat()
+        rows = self._project_tasks(project_id)
+        total = len(rows)
+        completed = sum(1 for row in rows if row['status'] == 'done')
+        overdue = sum(1 for row in rows if row['status'] != 'done' and row['due_date']
+                      and row['due_date'] < today_text)
+        due_soon = sum(1 for row in rows if row['status'] != 'done' and row['due_date']
+                       and today_text <= row['due_date'] <= (today + timedelta(days=3)).isoformat())
+        by_status = [{'status': status,
+                      'count': sum(1 for row in rows if row['status'] == status)}
+                     for status in TASK_STATUSES]
+        by_assignee = [{'user_id': row['user_id'], 'email': row['email'] or '未指派',
+                        'total': row['total'], 'completed': row['completed']}
+                       for row in self.db.execute('''SELECT t.assignee_user_id AS user_id,
+                            u.email AS email,COUNT(*) AS total,
+                            SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) AS completed
+                        FROM tasks t LEFT JOIN users u ON u.id=t.assignee_user_id
+                        WHERE t.project_id=? GROUP BY t.assignee_user_id
+                        ORDER BY total DESC,u.email''', (project_id,))]
+        by_requirement = [{'requirement_id': row['id'], 'title': row['title'],
+                           'archived': bool(row['archived']), 'total': row['total'],
+                           'completed': row['completed']}
+                          for row in self.db.execute('''SELECT r.id,r.title,r.archived,
+                                COUNT(t.id) AS total,
+                                SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) AS completed
+                            FROM requirements r JOIN tasks t
+                              ON t.requirement_id=r.id AND t.project_id=r.project_id
+                            WHERE r.project_id=? GROUP BY r.id ORDER BY r.id''', (project_id,))]
+        unlinked = self.db.execute('''SELECT COUNT(*) AS total,
+                SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS completed
+            FROM tasks WHERE project_id=? AND requirement_id IS NULL''', (project_id,)).fetchone()
+        if unlinked['total']:
+            by_requirement.append({'requirement_id': None, 'title': '未关联需求', 'archived': False,
+                                   'total': unlinked['total'], 'completed': unlinked['completed'] or 0})
+        start = today - timedelta(days=days - 1)
+        done_days = {row['entity_id']: row['day'] for row in self.db.execute('''
+            SELECT entity_id, MIN(substr(created_at,1,10)) AS day FROM audit_events
+            WHERE project_id=? AND entity_type='task' AND field='status' AND to_value='done'
+            GROUP BY entity_id''', (project_id,))}
+        baseline, per_day = 0, {}
+        for row in rows:
+            if row['status'] != 'done':
+                continue
+            day = done_days.get(row['id'])
+            if day is None or day < start.isoformat():
+                baseline += 1
+            else:
+                per_day[day] = per_day.get(day, 0) + 1
+        trend, running = [], baseline
+        for offset in range(days):
+            day = (start + timedelta(days=offset)).isoformat()
+            running += per_day.get(day, 0)
+            trend.append({'date': day, 'completed': running})
+        return {
+            'as_of': today_text,
+            'window_days': days,
+            'total': total,
+            'completed': completed,
+            'overdue': overdue,
+            'due_soon': due_soon,
+            'completion_rate': round(completed * 100.0 / total, 1) if total else 0.0,
+            'by_status': by_status,
+            'by_assignee': by_assignee,
+            'by_requirement': by_requirement,
+            'trend': trend,
+        }
+
+    @staticmethod
+    def _stats_today(today):
+        if today is None:
+            return date.today()
+        if isinstance(today, date):
+            return today
+        if isinstance(today, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', today):
+            try:
+                return date.fromisoformat(today)
+            except ValueError:
+                pass
+        raise AppError('统计基准日必须为 YYYY-MM-DD。')
+
+    def project_risks(self, project_id, limit=10, today=None):
+        """逾期与临期任务清单（US-38），按截止日升序。"""
+        project_id = self._integer(project_id, '项目编号')
+        self._project_exists(project_id)
+        limit = self._integer(limit, '返回条数')
+        if limit > 50:
+            raise AppError('风险清单单次最多返回 50 条。')
+        today = self._stats_today(today)
+        rows = self.db.execute('''SELECT t.id,t.title,t.status,t.due_date,t.assignee_user_id,
+                u.email AS assignee_email FROM tasks t LEFT JOIN users u ON u.id=t.assignee_user_id
+            WHERE t.project_id=? AND t.status<>'done' AND t.due_date IS NOT NULL
+            ORDER BY t.due_date,t.id LIMIT ?''', (project_id, limit)).fetchall()
+        items = []
+        for row in rows:
+            days_left = (date.fromisoformat(row['due_date']) - today).days
+            if days_left > 3:
+                continue
+            items.append({**dict(row), 'days_left': days_left,
+                          'level': 'overdue' if days_left < 0 else 'due_soon'})
+        return {'as_of': today.isoformat(), 'items': items,
+                'overdue': sum(1 for item in items if item['level'] == 'overdue'),
+                'due_soon': sum(1 for item in items if item['level'] == 'due_soon')}
+
+    def drilldown_tasks(self, project_id, dimension, value, limit=100):
+        """从统计图下钻到任务明细（US-40），只返回当前项目数据。"""
+        project_id = self._integer(project_id, '项目编号')
+        self._project_exists(project_id)
+        limit = self._integer(limit, '返回条数')
+        if limit > 200:
+            raise AppError('下钻明细单次最多返回 200 条。')
+        clauses, params = ['t.project_id=?'], [project_id]
+        if dimension == 'status':
+            if value not in TASK_STATUSES:
+                raise AppError('下钻维度取值不合法。')
+            clauses.append('t.status=?')
+            params.append(value)
+        elif dimension == 'assignee':
+            if value in (None, '', 'unassigned'):
+                clauses.append('t.assignee_user_id IS NULL')
+            else:
+                clauses.append('t.assignee_user_id=?')
+                params.append(self._integer(value, '负责人编号'))
+        elif dimension == 'requirement':
+            if value in (None, '', 'none'):
+                clauses.append('t.requirement_id IS NULL')
+            else:
+                clauses.append('t.requirement_id=?')
+                params.append(self._integer(value, '需求编号'))
+        elif dimension == 'completed_on':
+            day = self._stats_today(value).isoformat()
+            clauses.append('''t.status='done' AND t.id IN (SELECT entity_id FROM audit_events
+                WHERE project_id=? AND entity_type='task' AND field='status' AND to_value='done'
+                GROUP BY entity_id HAVING MIN(substr(created_at,1,10))=?)''')
+            params.extend([project_id, day])
+        elif dimension == 'overdue':
+            today = self._stats_today(value if value not in (None, '') else None)
+            clauses.append("t.status<>'done' AND t.due_date IS NOT NULL AND t.due_date<?")
+            params.append(today.isoformat())
+        elif dimension == 'due_soon':
+            today = self._stats_today(value if value not in (None, '') else None)
+            clauses.append("t.status<>'done' AND t.due_date IS NOT NULL "
+                           "AND t.due_date>=? AND t.due_date<=?")
+            params.extend([today.isoformat(), (today + timedelta(days=3)).isoformat()])
+        else:
+            raise AppError('下钻维度不合法。')
+        rows = self.db.execute('''SELECT t.id,t.title,t.status,t.due_date,t.assignee_user_id,
+                u.email AS assignee_email,t.requirement_id
+            FROM tasks t LEFT JOIN users u ON u.id=t.assignee_user_id
+            WHERE ''' + ' AND '.join(clauses) + ' ORDER BY t.status,t.due_date,t.id LIMIT ?',
+            [*params, limit]).fetchall()
+        return {'dimension': dimension, 'value': value,
+                'items': [dict(row) for row in rows], 'total': len(rows),
+                'truncated': len(rows) == limit}

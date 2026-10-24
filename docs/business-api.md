@@ -109,3 +109,28 @@ HTTP查询使用相同的snake_case名称：`page`、`page_size`、`assignee_use
 运行`python -m unittest discover -s tests -v`，默认包含HTTP契约测试；2026-10-18复核共95项后端测试通过，后续以实际输出为准。契约可单独运行`python tests/contracts/business_api_contract.py -v`。所有测试使用隔离数据库，覆盖归档恢复、跨项目、版本冲突、并发新关联、旧库迁移、查询索引、组合筛选、分页边界、重启持久化和失败不写入。故障测试覆盖迁移失败全量回滚、备份异常和恢复后重新升级；不代表已对正式数据完成恢复验收。
 
 `python scripts/check_database.py "数据库副本路径"`执行只读健康检查，退出码0为正常、1为发现异常、2为无法检查。不打开默认正式库、不调用Store、不迁移或修复，不创建不存在的库。检查包括结构版本、必需列、完整性、外键、跨项目需求关联和负责人资格（项目创建者属于合法负责人）；输出不含业务文本，每类定位编号最多100条。交付检查宜停服后在数据库副本上进行。
+
+## Sprint 3 统计与变更事件
+
+Sprint 3 在任务、需求之外新增只读统计接口与统一变更事件表，供仪表盘、下钻与角色变更追溯使用。四个入口均要求 `project.view`，全部为 `GET`；写操作仍走原有任务与成员接口。
+
+```text
+GET /api/projects/{pid}/stats?days=14
+GET /api/projects/{pid}/stats/tasks?dimension=status&value=done
+GET /api/projects/{pid}/risks?limit=10
+GET /api/projects/{pid}/audit?entity_type=task&entity_id=12&limit=20
+```
+
+`stats` 返回 `as_of`、`window_days`、`total`、`completed`、`overdue`、`due_soon`、`completion_rate`、`by_status`、`by_assignee`、`by_requirement`、`trend`。口径如下：`total` 为当前项目全部任务；`completed` 为状态等于 `done` 的任务；`overdue` 为未完成且 `due_date` 早于基准日；`due_soon` 为未完成且截止日在基准日起三天内；`completion_rate` 为完成数除以总数并保留一位小数，总数为 0 时为 0。`by_assignee` 含“未指派”分组；`by_requirement` 统计已挂接任务的需求并追加“未关联需求”分组，归档需求的历史任务照常计入。`trend` 按任务**首次**进入 `done` 的事件日期累计，窗口前的完成量与没有事件的历史数据计入起点，因此末点与 `completed` 一致；任务被回退后再完成不会重复计数。基准日默认为服务器本地日期，可用 `days` 调整窗口（1—90 天）。
+
+`stats/tasks` 的下钻维度为 `status`、`assignee`、`requirement`、`completed_on`、`overdue`、`due_soon`。`assignee` 取用户编号或 `unassigned`，`requirement` 取需求编号或 `none`，`completed_on` 取 `YYYY-MM-DD`；`limit` 默认 100、最大 200，返回 `items`、`total`、`truncated`。维度或取值不合法返回 400，项目不存在返回 404。
+
+`risks` 只返回未完成、有截止日且剩余天数不超过 3 天的任务，按截止日升序，`limit` 最大 50；每项含 `days_left` 与 `level`（`overdue` 或 `due_soon`）。该清单是查询结果，不写回任务。
+
+`audit` 读取 `audit_events`，按 `id` 倒序，`entity_type` 只接受 `task`、`requirement`、`membership`，`limit` 最大 100。每条记录含 `action`、`field`、`from_value`、`to_value`、`actor_email` 与 `entity_label`。事件在写事务内生成：任务创建记 `create`，字段变化按状态、标题、关联需求、负责人、截止日、排序逐条记 `update`；需求归档/恢复记 `archive`/`restore`；成员加入、改派角色、移出分别记 `create`、`update`、`remove`。事件表只读，服务端不提供修改或删除事件的接口；`actor_user_id` 在用户被删除后置空，但事件保留。
+
+变更只在同一事务内提交：写操作失败会连同事件一起回滚，不会留下“改了但没有记录”的状态。事件不记录任务正文快照，只记录字段前后值；任务被永久删除的能力当前不存在，因此事件可长期追溯。
+
+## 数据库与验证（v3 补充）
+
+结构版本提升到 3，新增 `audit_events` 表与两个索引；打开包含用户数据的 v2 数据库时，会先生成 `.pre-audit.bak` 快照再建表，失败回滚。健康检查工具同步要求该表存在，并新增“任务事件跨项目”检查。统计接口的自动化覆盖见 `tests/test_audit_and_stats.py` 与 `tests/test_stats_api.py`；浏览器回归见 `scripts/browser_insights.mjs`。

@@ -187,6 +187,13 @@ class Handler(BaseHTTPRequestHandler):
             raise AppError('请求必须是 JSON 对象。')
         return value
 
+    def _single_query(self, allowed):
+        """解析查询串：未知参数、重复参数和数组形式一律拒绝。"""
+        params = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+        if any(key not in allowed or len(values) != 1 for key, values in params.items()):
+            raise AppError('查询参数未知或重复。')
+        return {key: values[0] for key, values in params.items()}
+
     def cookie_value(self, name):
         cookie = SimpleCookie()
         try:
@@ -419,7 +426,7 @@ class Handler(BaseHTTPRequestHandler):
                 if method == 'GET':
                     return self.reply(self.store.get_requirement(project_id, requirement_id))
                 if method == 'PUT':
-                    return self.reply(self.store.update_requirement(project_id, requirement_id, self.payload()))
+                    return self.reply(self.store.update_requirement(project_id, requirement_id, self.payload(), actor=user['id']))
                 if method == 'DELETE':
                     raise AppError('需求不支持永久删除，请使用归档操作。', 405)
                 raise AppError('不支持的请求方法。', 405)
@@ -433,7 +440,7 @@ class Handler(BaseHTTPRequestHandler):
                 version = data.get('version')
                 if version is None:
                     raise AppError('归档需求须携带版本号，请刷新后重试。', 428)
-                return self.reply(self.store.archive_requirement(project_id, requirement_id, version))
+                return self.reply(self.store.archive_requirement(project_id, requirement_id, version, actor=user['id']))
             match = re.fullmatch(r'/api/projects/(\d+)/requirements/(\d+)/restore', path)
             if match:
                 if method != 'POST':
@@ -444,7 +451,43 @@ class Handler(BaseHTTPRequestHandler):
                 version = data.get('version')
                 if version is None:
                     raise AppError('恢复需求须携带版本号，请刷新后重试。', 428)
-                return self.reply(self.store.restore_requirement(project_id, requirement_id, version))
+                return self.reply(self.store.restore_requirement(project_id, requirement_id, version, actor=user['id']))
+            match = re.fullmatch(r'/api/projects/(\d+)/stats', path)
+            if match:
+                if method != 'GET':
+                    raise AppError('不支持的请求方法。', 405)
+                project_id = int(match.group(1))
+                self.store.require_permission(user, project_id, 'project.view')
+                params = self._single_query({'days'})
+                return self.reply(self.store.project_stats(project_id, **params))
+            match = re.fullmatch(r'/api/projects/(\d+)/stats/tasks', path)
+            if match:
+                if method != 'GET':
+                    raise AppError('不支持的请求方法。', 405)
+                project_id = int(match.group(1))
+                self.store.require_permission(user, project_id, 'project.view')
+                params = self._single_query({'dimension', 'value', 'limit'})
+                dimension = params.pop('dimension', None)
+                if dimension is None:
+                    raise AppError('下钻须指定 dimension。')
+                return self.reply(self.store.drilldown_tasks(
+                    project_id, dimension, params.pop('value', None), **params))
+            match = re.fullmatch(r'/api/projects/(\d+)/risks', path)
+            if match:
+                if method != 'GET':
+                    raise AppError('不支持的请求方法。', 405)
+                project_id = int(match.group(1))
+                self.store.require_permission(user, project_id, 'project.view')
+                return self.reply(self.store.project_risks(project_id,
+                                                           **self._single_query({'limit'})))
+            match = re.fullmatch(r'/api/projects/(\d+)/audit', path)
+            if match:
+                if method != 'GET':
+                    raise AppError('不支持的请求方法。', 405)
+                project_id = int(match.group(1))
+                self.store.require_permission(user, project_id, 'project.view')
+                return self.reply(self.store.list_audit(
+                    project_id, **self._single_query({'entity_type', 'entity_id', 'limit'})))
             match = re.fullmatch(r'/api/projects/(\d+)/tasks', path)
             if match:
                 project_id = int(match.group(1))
@@ -484,7 +527,7 @@ class Handler(BaseHTTPRequestHandler):
                 project_id, task_id = map(int, match.groups())
                 self.store.require_permission(user, project_id, 'workitems.manage')
                 if method == 'PUT':
-                    return self.reply(self.store.update_task(project_id, task_id, self.payload()))
+                    return self.reply(self.store.update_task(project_id, task_id, self.payload(), actor=user['id']))
                 if method == 'DELETE':
                     raise AppError('当前版本不支持永久删除任务。', 405)
             match = re.fullmatch(r'/api/projects/(\d+)/members', path)

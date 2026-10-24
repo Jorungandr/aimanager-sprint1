@@ -39,6 +39,8 @@ def inspect_database(path):
             'requirements': {'id', 'project_id', 'title', 'description', 'version', 'archived', 'created_by', 'created_at'},
             'tasks': {'id', 'project_id', 'requirement_id', 'assignee_user_id', 'title', 'status',
                       'version', 'due_date', 'position', 'created_by', 'created_at'},
+            'audit_events': {'id', 'project_id', 'entity_type', 'entity_id', 'action', 'field',
+                             'from_value', 'to_value', 'actor_user_id', 'created_at'},
         }
         for table, columns in required.items():
             actual = {row[1] for row in db.execute(f'PRAGMA table_info({table})')}
@@ -60,6 +62,9 @@ def inspect_database(path):
                     AND p.owner_user_id=t.assignee_user_id)
                 AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.project_id=t.project_id
                     AND m.user_id=t.assignee_user_id) ORDER BY t.id''',
+            'cross_project_task_event': '''SELECT e.id FROM audit_events e JOIN tasks t
+                ON t.id=e.entity_id WHERE e.entity_type='task'
+                AND t.project_id<>e.project_id ORDER BY e.id''',
         }
         for category, sql in checks.items():
             ids = [row[0] for row in db.execute(sql)]

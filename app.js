@@ -203,11 +203,15 @@ async function refresh() {
   setView(activeView);
   await renderProjects();
   renderCheckProjects();
+  if (activeView === 'insights') {
+    await renderInsights();
+  }
 }
 function setView(view) {
   const canAdmin = current && (current.is_admin || current.can_manage_roles || current.can_manage_projects);
   activeView = view === 'administration' && !canAdmin ? 'collaboration' : view;
   $('collaborationPanel').hidden = activeView !== 'collaboration';
+  $('insightsPanel').hidden = activeView !== 'insights';
   $('adminPanel').hidden = activeView !== 'administration' || !canAdmin;
   $('checkPanel').hidden = activeView !== 'verification';
   document.querySelectorAll('[data-view]').forEach(button => {
@@ -769,10 +773,14 @@ $('editTaskForm').addEventListener('submit', async event => {
     }
   }
 });
-document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => setView(button.dataset.view)));
+document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
+  setView(button.dataset.view);
+  if (activeView === 'insights') renderInsights().catch(error => say(error.message, true));
+}));
 $('projectPicker').addEventListener('change', () => {
   activeProject = $('projectPicker').value;
   renderProjects().catch(error => say(error.message, true));
+  if (activeView === 'insights') renderInsights().catch(error => say(error.message, true));
 });
 $('refreshWorkspace').addEventListener('click', async () => {
   $('refreshWorkspace').disabled = true;
@@ -820,3 +828,369 @@ async function check(path) { try { const data = await api(path); $('checkResult'
 $('checkView').addEventListener('click', () => check(`/api/projects/${$('checkProject').value}/members`));
 $('checkManage').addEventListener('click', () => check(`/api/projects/${$('checkProject').value}/manage-check`));
 refresh().catch(e => say(e.message, true));
+
+/* ---------- 数据概览：健康度卡片、分布图、趋势、风险与变更记录 ---------- */
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const auditFieldLabels = {
+  status: '状态', title: '标题', requirement_id: '关联需求', assignee_user_id: '负责人',
+  due_date: '截止日', position: '排序', description: '说明', role_id: '角色', archived: '归档状态',
+};
+const auditActionLabels = { create: '新增', update: '修改', archive: '归档', restore: '恢复', remove: '移出' };
+const auditEntityLabels = { task: '任务', requirement: '需求', membership: '成员' };
+let insightRequest = 0;
+let insightAuditType = 'all';
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+function svgNode(tag, attrs = {}) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
+  return node;
+}
+function insightEmpty(text) { return el('div', 'empty-state compact', text); }
+function chartScroll(chart) {
+  const wrap = el('div', 'chart-scroll');
+  wrap.append(chart);
+  return wrap;
+}
+function shortName(text, limit = 18) {
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+function activateOn(button, handler) {
+  button.addEventListener('click', handler);
+  button.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      handler();
+    }
+  });
+}
+async function drillTasks(target) {
+  const panel = $('insightDrill');
+  if (!panel) return;
+  panel.setAttribute('aria-busy', 'true');
+  try {
+    const query = new URLSearchParams({ dimension: target.dimension, value: target.value || '' });
+    const data = await api(`/api/projects/${activeProject}/stats/tasks?${query}`);
+    panel.replaceChildren(el('h4', null, `${target.label} · ${data.total} 项`));
+    panel.append(data.items.length ? taskTable(data.items) : insightEmpty('该维度下没有任务。'));
+    if (data.truncated) {
+      panel.append(el('p', 'hint', '明细最多显示 200 条；更多任务请回到看板用搜索与负责人筛选查看。'));
+    }
+    panel.focus();
+  } catch (error) {
+    panel.replaceChildren(el('p', 'error', `下钻失败：${error.message}`));
+  } finally {
+    panel.removeAttribute('aria-busy');
+  }
+}
+async function renderInsights() {
+  const body = $('insightBody');
+  const scope = $('insightScope');
+  const request = ++insightRequest;
+  if (!activeProject) {
+    scope.textContent = '当前项目：—';
+    body.replaceChildren(insightEmpty('当前账号还没有可访问的项目。创建项目并加入成员后，这里会显示任务总数、完成率与完成趋势。'));
+    return;
+  }
+  const project = projects.find(item => String(item.id) === activeProject);
+  scope.textContent = `当前项目：${project ? project.name : '—'}`;
+  body.setAttribute('aria-busy', 'true');
+  try {
+    const base = `/api/projects/${activeProject}`;
+    const filter = insightAuditType === 'all' ? '' : `entity_type=${insightAuditType}&`;
+    const [stats, risks, audit] = await Promise.all([
+      api(`${base}/stats`),
+      api(`${base}/risks?limit=10`),
+      api(`${base}/audit?${filter}limit=12`),
+    ]);
+    if (request !== insightRequest) return;
+    body.replaceChildren(kpiBlock(stats), statusBlock(stats), trendBlock(stats),
+      assigneeBlock(stats), requirementBlock(stats), riskBlock(risks), auditBlock(audit));
+  } catch (error) {
+    if (request === insightRequest) {
+      body.replaceChildren(insightEmpty(`无法加载统计数据：${error.message}`));
+    }
+  } finally {
+    if (request === insightRequest) body.removeAttribute('aria-busy');
+  }
+}
+function kpiBlock(stats) {
+  const card = el('section', 'insight-card');
+  card.append(el('h3', null, '项目健康度'));
+  card.append(el('p', 'hint', `统计基准日 ${stats.as_of}；逾期按“未完成且截止日早于基准日”判定。`));
+  const grid = el('div', 'kpi-grid');
+  const plain = el('div', 'kpi');
+  plain.append(el('span', 'kpi-label', '任务总数'), el('strong', 'kpi-value', String(stats.total)),
+    el('span', 'kpi-note', '当前项目全部任务'));
+  grid.append(plain);
+  grid.append(kpiButton('已完成', String(stats.completed), `完成率 ${stats.completion_rate}%`,
+    { dimension: 'status', value: 'done', label: '已完成任务' }));
+  grid.append(kpiButton('已逾期', String(stats.overdue), '未完成且已过截止日',
+    { dimension: 'overdue', value: '', label: '已逾期任务' }));
+  grid.append(kpiButton('3 天内到期', String(stats.due_soon), '未完成且临期',
+    { dimension: 'due_soon', value: '', label: '临期任务' }));
+  card.append(grid);
+  const drill = el('section', 'insight-drill');
+  drill.id = 'insightDrill';
+  drill.tabIndex = -1;
+  drill.append(el('p', 'hint', '点击卡片、柱形、数据点或“下钻”按钮，在这里核对对应的任务明细。'));
+  card.append(drill);
+  return card;
+}
+function kpiButton(title, value, note, target) {
+  const node = el('button', 'kpi');
+  node.type = 'button';
+  node.setAttribute('aria-label', `${title} ${value}，查看任务明细`);
+  node.append(el('span', 'kpi-label', title), el('strong', 'kpi-value', value), el('span', 'kpi-note', note));
+  activateOn(node, () => drillTasks(target));
+  return node;
+}
+function statusBlock(stats) {
+  const card = el('section', 'insight-card');
+  card.append(el('h3', null, '状态分布'));
+  card.append(el('p', 'hint', '柱形高度表示任务数量；点击柱形或按回车查看该状态的任务明细。'));
+  const chart = svgNode('svg', { viewBox: '0 0 480 210', class: 'chart', role: 'img',
+    'aria-label': `状态分布：${stats.by_status.map(item => `${statusLabels[item.status]} ${item.count} 项`).join('，')}` });
+  const max = Math.max(1, ...stats.by_status.map(item => item.count));
+  const slot = 480 / stats.by_status.length;
+  const width = 64;
+  stats.by_status.forEach((item, index) => {
+    const height = Math.round(item.count / max * 120) + 2;
+    const x = Math.round(index * slot + (slot - width) / 2);
+    const y = 160 - height;
+    const bar = svgNode('rect', { x, y, width, height, rx: 8, class: 'chart-bar',
+      tabindex: '0', role: 'button',
+      'aria-label': `${statusLabels[item.status]} ${item.count} 项，查看任务明细` });
+    activateOn(bar, () => drillTasks({ dimension: 'status', value: item.status, label: statusLabels[item.status] }));
+    chart.append(bar);
+    const value = svgNode('text', { x: x + width / 2, y: y - 10, class: 'chart-value', 'text-anchor': 'middle' });
+    value.textContent = String(item.count);
+    const label = svgNode('text', { x: x + width / 2, y: 184, class: 'chart-label', 'text-anchor': 'middle' });
+    label.textContent = statusLabels[item.status];
+    chart.append(value, label);
+  });
+  chart.append(svgNode('line', { x1: 20, y1: 160, x2: 460, y2: 160, class: 'chart-axis' }));
+  card.append(chartScroll(chart));
+  return card;
+}
+function trendBlock(stats) {
+  const card = el('section', 'insight-card');
+  const trend = stats.trend;
+  const first = trend[0];
+  const last = trend[trend.length - 1];
+  card.append(el('h3', null, `完成趋势（最近 ${stats.window_days} 天）`));
+  card.append(el('p', 'hint', '按任务首次进入“已完成”的日期累计；历史完成且没有事件记录的任务计入窗口起点。点击数据点查看当天完成的任务。'));
+  const max = Math.max(1, ...trend.map(item => item.completed));
+  const left = 40, right = 456, top = 24, bottom = 150;
+  const step = (right - left) / Math.max(1, trend.length - 1);
+  const points = trend.map((item, index) => ({
+    x: left + index * step,
+    y: bottom - (item.completed / max) * (bottom - top),
+    ...item,
+  }));
+  const chart = svgNode('svg', { viewBox: '0 0 480 200', class: 'chart', role: 'img',
+    'aria-label': `完成趋势：${first.date} 累计 ${first.completed} 项，${last.date} 累计 ${last.completed} 项` });
+  chart.append(svgNode('line', { x1: left, y1: bottom, x2: right, y2: bottom, class: 'chart-axis' }));
+  chart.append(svgNode('line', { x1: left, y1: top, x2: left, y2: bottom, class: 'chart-axis' }));
+  chart.append(svgNode('polyline', {
+    points: points.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' '),
+    class: 'chart-line',
+  }));
+  points.forEach(point => {
+    const dot = svgNode('circle', { cx: point.x, cy: point.y, r: 5, class: 'chart-dot',
+      tabindex: '0', role: 'button',
+      'aria-label': `${point.date} 累计完成 ${point.completed} 项，查看当天完成的任务` });
+    activateOn(dot, () => drillTasks({
+      dimension: 'completed_on', value: point.date, label: `${point.date} 完成的任务`,
+    }));
+    chart.append(dot);
+  });
+  [0, Math.floor((trend.length - 1) / 2), trend.length - 1].forEach(index => {
+    const point = points[index];
+    const label = svgNode('text', { x: point.x, y: 176, class: 'chart-label',
+      'text-anchor': index === 0 ? 'start' : (index === trend.length - 1 ? 'end' : 'middle') });
+    label.textContent = point.date.slice(5);
+    chart.append(label);
+  });
+  const axisValue = svgNode('text', { x: 8, y: top + 4, class: 'chart-label' });
+  axisValue.textContent = String(max);
+  const axisZero = svgNode('text', { x: 8, y: bottom + 4, class: 'chart-label' });
+  axisZero.textContent = '0';
+  chart.append(axisValue, axisZero);
+  card.append(chartScroll(chart));
+  return card;
+}
+function assigneeBlock(stats) {
+  const card = el('section', 'insight-card');
+  card.append(el('h3', null, '负责人分布'));
+  card.append(el('p', 'hint', '横条长度为任务数，深色段为已完成；点击横条查看该负责人的任务明细。'));
+  const items = stats.by_assignee.slice(0, 6);
+  if (!items.length) {
+    card.append(insightEmpty('还没有任务，无法计算负责人分布。'));
+    return card;
+  }
+  const max = Math.max(1, ...items.map(item => item.total));
+  const row = 30, left = 132, width = 300;
+  const chart = svgNode('svg', { viewBox: `0 0 ${480} ${items.length * row + 10}`, class: 'chart', role: 'img',
+    'aria-label': `负责人分布：${items.map(item => `${item.email} ${item.total} 项`).join('，')}` });
+  items.forEach((item, index) => {
+    const y = index * row + 6;
+    const total = Math.round(item.total / max * width);
+    const done = item.total ? Math.round(item.completed / item.total * total) : 0;
+    const bar = svgNode('rect', { x: left, y, width: Math.max(2, total), height: 18, rx: 6,
+      class: 'chart-bar', tabindex: '0', role: 'button',
+      'aria-label': `${item.email} ${item.total} 项，已完成 ${item.completed} 项，查看明细` });
+    activateOn(bar, () => drillTasks({
+      dimension: 'assignee', value: item.user_id === null ? 'unassigned' : String(item.user_id),
+      label: `${item.email} 的任务`,
+    }));
+    const filled = svgNode('rect', { x: left, y, width: done, height: 18, rx: 6, class: 'chart-bar-done' });
+    const name = svgNode('text', { x: 8, y: y + 14, class: 'chart-label' });
+    name.textContent = shortName(item.email);
+    const value = svgNode('text', { x: left + total + 8, y: y + 14, class: 'chart-label' });
+    value.textContent = `${item.total}／${item.completed}`;
+    chart.append(bar, filled, name, value);
+  });
+  card.append(chartScroll(chart));
+  return card;
+}
+function requirementBlock(stats) {
+  const card = el('section', 'insight-card');
+  card.append(el('h3', null, '需求完成率'));
+  card.append(el('p', 'hint', '只统计已经挂接任务的需求；归档需求的历史任务仍计入。'));
+  if (!stats.by_requirement.length) {
+    card.append(insightEmpty('还没有关联任务的需求。'));
+    return card;
+  }
+  const table = el('table', 'mini-table');
+  const head = el('thead');
+  const headRow = el('tr');
+  ['需求', '任务数', '已完成', '完成率', '操作'].forEach((text, index) => {
+    const th = el('th', null, text);
+    th.scope = 'col';
+    if (index >= 1 && index <= 3) th.className = 'numeric';
+    headRow.append(th);
+  });
+  head.append(headRow);
+  const body = el('tbody');
+  for (const item of stats.by_requirement) {
+    const row = el('tr');
+    const title = el('td', null, item.archived ? `${item.title}（已归档）` : item.title);
+    const total = el('td', 'numeric', String(item.total));
+    const done = el('td', 'numeric', String(item.completed));
+    const rate = el('td', 'numeric', `${item.total ? Math.round(item.completed * 1000 / item.total) / 10 : 0}%`);
+    const action = el('td');
+    const button = el('button', 'secondary small', '下钻');
+    button.type = 'button';
+    button.addEventListener('click', () => drillTasks({
+      dimension: 'requirement', value: item.requirement_id === null ? 'none' : String(item.requirement_id),
+      label: `${item.title} 的任务`,
+    }));
+    action.append(button);
+    row.append(title, total, done, rate, action);
+    body.append(row);
+  }
+  table.append(head, body);
+  const wrap = el('div', 'table-scroll');
+  wrap.append(table);
+  card.append(wrap);
+  return card;
+}
+function riskBlock(risks) {
+  const card = el('section', 'insight-card');
+  card.append(el('h3', null, '逾期与风险任务'));
+  card.append(el('p', 'hint', `基准日 ${risks.as_of}；列出已逾期与 3 天内到期且未完成的任务，最多 10 条。`));
+  if (!risks.items.length) {
+    card.append(insightEmpty('当前没有逾期或临期任务。'));
+    return card;
+  }
+  const table = el('table', 'mini-table');
+  const head = el('thead');
+  const headRow = el('tr');
+  ['任务', '负责人', '截止日', '状态', '剩余'].forEach(text => {
+    const th = el('th', null, text);
+    th.scope = 'col';
+    headRow.append(th);
+  });
+  head.append(headRow);
+  const body = el('tbody');
+  for (const item of risks.items) {
+    const row = el('tr');
+    const days = item.days_left < 0 ? `逾期 ${-item.days_left} 天` : `${item.days_left} 天`;
+    const level = el('td', null, days);
+    level.className = item.level === 'overdue' ? 'risk-overdue' : 'risk-soon';
+    row.append(el('td', null, item.title), el('td', null, item.assignee_email || '未指派'),
+      el('td', null, item.due_date), el('td', null, statusLabels[item.status]), level);
+    body.append(row);
+  }
+  table.append(head, body);
+  const wrap = el('div', 'table-scroll');
+  wrap.append(table);
+  card.append(wrap);
+  return card;
+}
+function auditBlock(events) {
+  const card = el('section', 'insight-card');
+  card.append(el('h3', null, '变更记录'));
+  card.append(el('p', 'hint', '任务、需求与成员角色的变更都写入同一张事件表；记录只读，不能被页面修改。'));
+  const select = el('select');
+  select.setAttribute('aria-label', '按对象类型筛选变更记录');
+  [['all', '全部类型'], ['task', '任务'], ['requirement', '需求'], ['membership', '成员角色']]
+    .forEach(([value, text]) => select.append(option(value, text)));
+  select.value = insightAuditType;
+  select.addEventListener('change', () => {
+    insightAuditType = select.value;
+    renderInsights().catch(error => say(error.message, true));
+  });
+  card.append(select);
+  if (!events.length) {
+    card.append(insightEmpty('当前筛选条件下没有变更记录。'));
+    return card;
+  }
+  const list = el('ol', 'audit-list');
+  for (const event of events) {
+    const item = el('li');
+    const when = el('time', 'audit-time', event.created_at.slice(5, 16));
+    const who = event.actor_email || '系统';
+    const entity = auditEntityLabels[event.entity_type] || event.entity_type;
+    const label = event.entity_label ? `「${event.entity_label}」` : `#${event.entity_id}`;
+    let text = `${who} ${auditActionLabels[event.action] || event.action}${entity}${label}`;
+    if (event.field) {
+      const field = auditFieldLabels[event.field] || event.field;
+      const before = event.from_value === null ? '空' : event.from_value;
+      const after = event.to_value === null ? '空' : event.to_value;
+      text += ` · ${field} ${before} → ${after}`;
+    }
+    item.append(when, document.createTextNode(text));
+    list.append(item);
+  }
+  card.append(list);
+  return card;
+}
+function taskTable(items) {
+  const table = el('table', 'mini-table');
+  const head = el('thead');
+  const headRow = el('tr');
+  ['任务', '状态', '负责人', '截止日'].forEach(text => {
+    const th = el('th', null, text);
+    th.scope = 'col';
+    headRow.append(th);
+  });
+  head.append(headRow);
+  const body = el('tbody');
+  for (const item of items) {
+    const row = el('tr');
+    row.append(el('td', null, item.title), el('td', null, statusLabels[item.status] || item.status),
+      el('td', null, item.assignee_email || '未指派'), el('td', null, item.due_date || '—'));
+    body.append(row);
+  }
+  table.append(head, body);
+  const wrap = el('div', 'table-scroll');
+  wrap.append(table);
+  return wrap;
+}

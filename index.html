@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="light">
   <meta name="theme-color" content="#1f6a83">
   <meta name="description" content="爱管理：面向 5—15 人小团队的轻量项目协作原型，覆盖需求、任务、负责人、截止日与看板流转。">
-  <title>爱管理 · Sprint 2</title>
+  <title>爱管理 · Sprint 3</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -15,9 +15,9 @@
 <div class="shell">
   <header class="topbar">
     <div class="brand">
-      <p class="eyebrow">爱管理 · Sprint 2 累积增量</p>
-      <h1>权限底座与项目协作</h1>
-      <p class="sub">创建需求和任务，指派负责人及截止日，并在看板中推进状态。</p>
+      <p class="eyebrow">爱管理 · Sprint 3 发布增量</p>
+      <h1>权限、协作与数据概览</h1>
+      <p class="sub">创建需求和任务、指派负责人并在看板中推进状态，再从数据概览核对完成率、分布与变更记录。</p>
     </div>
     <div class="topbar-actions">
       <button id="logout" class="secondary" type="button" hidden>退出登录</button>
@@ -61,6 +61,7 @@
     <nav class="workspace-nav" aria-label="工作区导航">
       <div class="workspace-tabs" role="group" aria-label="切换视图">
         <button type="button" data-view="collaboration" aria-pressed="true">项目协作</button>
+        <button type="button" data-view="insights" aria-pressed="false">数据概览</button>
         <button type="button" data-view="administration" aria-pressed="false">管理配置</button>
         <button type="button" data-view="verification" aria-pressed="false">权限验证</button>
       </div>
@@ -152,6 +153,18 @@
       <div id="projects"></div>
     </section>
 
+    <section id="insightsPanel" class="panel" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">PROJECT INSIGHTS</p>
+          <h2>数据概览</h2>
+        </div>
+        <p class="scope-note" id="insightScope">当前项目：—</p>
+      </div>
+      <p class="panel-lead">统计范围跟随上方“当前项目”。数字来自任务表与变更事件表，图表、卡片与下钻明细使用同一份数据；只读成员也能查看，但不能修改任务。</p>
+      <div id="insightBody" aria-live="polite"></div>
+    </section>
+
     <section id="checkPanel" class="panel">
       <div class="panel-heading">
         <div>
@@ -169,7 +182,7 @@
     </section>
   </main>
 
-  <footer>教学演示原型 · Sprint 1 权限基线 + Sprint 2 协作增量 · 服务器执行权限校验</footer>
+  <footer>教学演示原型 · Sprint 1 权限基线 + Sprint 2 协作增量 + Sprint 3 数据概览 · 服务器执行权限校验</footer>
 </div>
 
 <dialog id="taskDialog" aria-labelledby="taskDialogTitle">
