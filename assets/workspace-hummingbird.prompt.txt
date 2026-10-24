@@ -1,0 +1,4 @@
+用途：爱管理项目主页横幅，延续登录页的纸艺蜂鸟风格。
+生成方式：内置 imagegen，2026-10-24。未使用参考图片。
+原始提示词：
+Use case: stylized-concept. Asset type: panoramic editorial art for the header of 爱管理, a Chinese small-team collaboration dashboard. Beautiful photoreal tactile paper sculpture, one elegant deep teal paper hummingbird flying toward a warm ivory folded-paper stairway and organized upright paper cards. Delicate layered wing feathers, small muted ochre paper tab, soft directional morning daylight, warm off-white matte paper studio backdrop. Landscape very wide 3:1 panoramic composition. All subjects concentrated in the right half, left half clean quiet warm ivory negative space for HTML overlay. Show entire hummingbird, no cut-off wings. Sophisticated art direction, crafted physical material and natural shadows, same restrained teal/ivory world as a premium paper sculpture. No text, no letters, no charts, no numbers, no UI, no watermark, no emoji, no cartoon, no gradient background.
