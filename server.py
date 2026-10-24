@@ -259,13 +259,16 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         allowed = {'/': ('index.html', 'text/html'), '/index.html': ('index.html', 'text/html'),
-                   '/app.js': ('app.js', 'text/javascript'), '/styles.css': ('styles.css', 'text/css')}
+                   '/app.js': ('app.js', 'text/javascript'), '/styles.css': ('styles.css', 'text/css'),
+                   '/workspace.css': ('workspace.css', 'text/css'),
+                   '/assets/hummingbird.png': ('assets/hummingbird.png', 'image/png')}
         if path not in allowed:
             raise AppError('页面不存在。', 404)
         name, mime = allowed[path]
         body = (ROOT / name).read_bytes()
         self.send_response(200)
-        self.send_header('Content-Type', f'{mime}; charset=utf-8')
+        content_type = mime if mime.startswith('image/') else f'{mime}; charset=utf-8'
+        self.send_header('Content-Type', content_type)
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Content-Length', str(len(body)))

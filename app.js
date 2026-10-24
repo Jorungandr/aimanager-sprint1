@@ -52,6 +52,7 @@ function closeDialogs() {
 /* 登录过期统一收口：清空编辑上下文、关闭弹窗、回到登录页并说明原因。 */
 function enterLoggedOut() {
   current = null;
+  syncShell();
   projectRequest += 1;
   closeDialogs();
   filters.clear();
@@ -168,9 +169,11 @@ async function refresh() {
     }
     current = null;
   }
+  syncShell();
   $('setupPanel').hidden = true; $('loginPanel').hidden = true; $('workspace').hidden = !current; $('logout').hidden = !current;
   if (!current) { const status = await api('/api/status'); $(status.needs_setup ? 'setupPanel' : 'loginPanel').hidden = false; return; }
   $('currentUser').textContent = current.email;
+  $('currentUser').title = current.email;
   const canManageRoles = current.can_manage_roles;
   const canManageProjects = current.can_manage_projects;
   $('adminPanel').hidden = !(current.is_admin || canManageRoles || canManageProjects);
@@ -196,7 +199,7 @@ async function refresh() {
   const pickerHint = $('pickerHint');
   if (pickerHint) {
     pickerHint.textContent = projects.length
-      ? '切换项目后，成员、需求与看板会同步刷新；页面只显示当前项目的数据，跨项目内容不会混入。'
+      ? '成员、需求、看板与数据概览均跟随当前项目。'
       : '当前账号还没有可访问的项目，因此没有可切换的选项。请由项目管理者创建项目并把你加入成员。';
   }
   renderMatrix();
@@ -210,6 +213,21 @@ async function refresh() {
 function setView(view) {
   const canAdmin = current && (current.is_admin || current.can_manage_roles || current.can_manage_projects);
   activeView = view === 'administration' && !canAdmin ? 'collaboration' : view;
+  const titles = {
+    collaboration: ['项目协作', '把分工落到任务，让进展清晰可见。'],
+    insights: ['数据概览', '从交付进度到到期风险，掌握项目全貌。'],
+    administration: ['管理配置', '为团队建立清晰的角色、权限与项目边界。'],
+    verification: ['权限验证', '核对当前账号的项目访问与成员管理权限。'],
+  };
+  const title = titles[activeView] || titles.collaboration;
+  $('pageTitle').textContent = title[0];
+  $('pageDescription').textContent = title[1];
+  $('navToggle').setAttribute('aria-expanded', 'false');
+  $('navToggle').textContent = '展开导航';
+  if (activeView !== 'insights') {
+    insightRequest += 1;
+    insightDrillRequest += 1;
+  }
   $('collaborationPanel').hidden = activeView !== 'collaboration';
   $('insightsPanel').hidden = activeView !== 'insights';
   $('adminPanel').hidden = activeView !== 'administration' || !canAdmin;
@@ -218,6 +236,21 @@ function setView(view) {
     button.setAttribute('aria-pressed', String(button.dataset.view === activeView));
     button.hidden = button.dataset.view === 'administration' && !canAdmin;
   });
+}
+function syncShell() {
+    document.body.classList.toggle('workspace-ready', Boolean(current));
+    $('authLayout').hidden = Boolean(current);
+    if (!current) {
+        insightRequest += 1;
+        insightDrillRequest += 1;
+        $('insightBody').replaceChildren();
+        $('insightBody').removeAttribute('aria-busy');
+        $('pageTitle').textContent = '让团队协作，有条不紊。';
+        $('pageDescription').textContent = '把需求、任务和进展，放在一个清晰的工作空间。';
+    } else {
+        const initial = current.email.slice(0, 1).toUpperCase();
+        document.querySelector('.account-avatar').textContent = initial;
+    }
 }
 async function allowed(path) {
   try {
@@ -777,6 +810,12 @@ document.querySelectorAll('[data-view]').forEach(button => button.addEventListen
   setView(button.dataset.view);
   if (activeView === 'insights') renderInsights().catch(error => say(error.message, true));
 }));
+$('navToggle').addEventListener('click', () => {
+    const button = $('navToggle');
+    const expanded = button.getAttribute('aria-expanded') !== 'true';
+    button.setAttribute('aria-expanded', String(expanded));
+    button.textContent = expanded ? '收起导航' : '展开导航';
+});
 $('projectPicker').addEventListener('change', () => {
   activeProject = $('projectPicker').value;
   renderProjects().catch(error => say(error.message, true));
@@ -838,6 +877,7 @@ const auditFieldLabels = {
 const auditActionLabels = { create: '新增', update: '修改', archive: '归档', restore: '恢复', remove: '移出' };
 const auditEntityLabels = { task: '任务', requirement: '需求', membership: '成员' };
 let insightRequest = 0;
+let insightDrillRequest = 0;
 let insightAuditType = 'all';
 
 function el(tag, className, text) {
@@ -870,36 +910,52 @@ function activateOn(button, handler) {
   });
 }
 async function drillTasks(target) {
-  const panel = $('insightDrill');
-  if (!panel) return;
-  panel.setAttribute('aria-busy', 'true');
-  try {
-    const query = new URLSearchParams({ dimension: target.dimension, value: target.value || '' });
-    const data = await api(`/api/projects/${activeProject}/stats/tasks?${query}`);
-    panel.replaceChildren(el('h4', null, `${target.label} · ${data.total} 项`));
-    panel.append(data.items.length ? taskTable(data.items) : insightEmpty('该维度下没有任务。'));
-    if (data.truncated) {
-      panel.append(el('p', 'hint', '明细最多显示 200 条；更多任务请回到看板用搜索与负责人筛选查看。'));
+    const panel = $('insightDrill');
+    if (!panel || !current || !activeProject) {
+        return;
     }
-    panel.focus();
-  } catch (error) {
-    panel.replaceChildren(el('p', 'error', `下钻失败：${error.message}`));
-  } finally {
-    panel.removeAttribute('aria-busy');
-  }
+    const request = ++insightDrillRequest;
+    const project = activeProject;
+    const valid = () => request === insightDrillRequest && current && project === activeProject
+        && panel.isConnected && activeView === 'insights';
+    panel.setAttribute('aria-busy', 'true');
+    try {
+        const query = new URLSearchParams({ dimension: target.dimension, value: target.value || '', limit: '200' });
+        const data = await api(`/api/projects/${project}/stats/tasks?${query}`);
+        if (!valid()) {
+            return;
+        }
+        panel.replaceChildren(el('h4', null, `${target.label} · ${data.total} 项`));
+        panel.append(data.items.length ? taskTable(data.items) : insightEmpty('该维度下没有任务。'));
+        if (data.truncated) {
+            panel.append(el('p', 'hint', `共 ${data.total} 项，当前显示 ${data.items.length} 项。更多任务请回到看板筛选查看。`));
+        }
+        panel.focus();
+    } catch (error) {
+        if (valid()) {
+            panel.replaceChildren(el('p', 'error', `无法加载任务：${error.message}`));
+        }
+    } finally {
+        if (valid()) {
+            panel.removeAttribute('aria-busy');
+        }
+    }
 }
 async function renderInsights() {
   const body = $('insightBody');
   const scope = $('insightScope');
   const request = ++insightRequest;
+  insightDrillRequest += 1;
   if (!activeProject) {
     scope.textContent = '当前项目：—';
     body.replaceChildren(insightEmpty('当前账号还没有可访问的项目。创建项目并加入成员后，这里会显示任务总数、完成率与完成趋势。'));
+    body.removeAttribute('aria-busy');
     return;
   }
   const project = projects.find(item => String(item.id) === activeProject);
   scope.textContent = `当前项目：${project ? project.name : '—'}`;
   body.setAttribute('aria-busy', 'true');
+  body.replaceChildren(el('p', 'insight-loading', '正在加载当前项目的数据…'));
   try {
     const base = `/api/projects/${activeProject}`;
     const filter = insightAuditType === 'all' ? '' : `entity_type=${insightAuditType}&`;
@@ -1137,7 +1193,7 @@ function riskBlock(risks) {
 function auditBlock(events) {
   const card = el('section', 'insight-card');
   card.append(el('h3', null, '变更记录'));
-  card.append(el('p', 'hint', '任务、需求与成员角色的变更都写入同一张事件表；记录只读，不能被页面修改。'));
+  card.append(el('p', 'hint', '追溯任务、需求与成员角色的最近变更。'));
   const select = el('select');
   select.setAttribute('aria-label', '按对象类型筛选变更记录');
   [['all', '全部类型'], ['task', '任务'], ['requirement', '需求'], ['membership', '成员角色']]
@@ -1162,8 +1218,14 @@ function auditBlock(events) {
     let text = `${who} ${auditActionLabels[event.action] || event.action}${entity}${label}`;
     if (event.field) {
       const field = auditFieldLabels[event.field] || event.field;
-      const before = event.from_value === null ? '空' : event.from_value;
-      const after = event.to_value === null ? '空' : event.to_value;
+      const format = value => {
+        if (value === null) {
+          return '空';
+        }
+        return event.field === 'status' ? (statusLabels[value] || value) : value;
+      };
+      const before = format(event.from_value);
+      const after = format(event.to_value);
       text += ` · ${field} ${before} → ${after}`;
     }
     item.append(when, document.createTextNode(text));
