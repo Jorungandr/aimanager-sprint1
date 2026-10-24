@@ -4,7 +4,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class DatabaseVersionError(Exception):
@@ -26,7 +26,8 @@ def open_database(path):
 def _initialize(db, path):
     db.row_factory = sqlite3.Row
     # Refuse newer schemas before executing any DDL or data normalization.
-    if db.execute('PRAGMA user_version').fetchone()[0] > SCHEMA_VERSION:
+    current_version = db.execute('PRAGMA user_version').fetchone()[0]
+    if current_version > SCHEMA_VERSION:
         raise DatabaseVersionError('数据库版本高于当前程序支持范围，请使用更新版本的程序。')
     db.execute('PRAGMA foreign_keys=ON')
     task_columns = {row['name'] for row in db.execute('PRAGMA table_info(tasks)')}
@@ -38,6 +39,9 @@ def _initialize(db, path):
             _backup(db, path, '.pre-hardening.bak')
         if not {'version', 'archived'}.issubset(requirement_columns):
             _backup(db, path, '.pre-requirements.bak')
+        # v3 adds the audit trail; snapshot populated v2 databases before DDL.
+        if current_version < 3:
+            _backup(db, path, '.pre-audit.bak')
     # executescript commits any existing transaction: begin inside the script.
     # The caller commits all schema/data changes together or rolls them back.
     db.executescript('''
@@ -78,6 +82,17 @@ def _initialize(db, path):
         created_by INTEGER NOT NULL REFERENCES users(id),
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         version INTEGER NOT NULL DEFAULT 1);
+      CREATE TABLE IF NOT EXISTS audit_events (
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        entity_type TEXT NOT NULL CHECK(entity_type IN ('task','requirement','membership')),
+        entity_id INTEGER NOT NULL,
+        action TEXT NOT NULL CHECK(action IN ('create','update','archive','restore','remove')),
+        field TEXT,
+        from_value TEXT,
+        to_value TEXT,
+        actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')));
     ''')
     # Re-read columns because the script may have created new tables.
     task_columns = {row['name'] for row in db.execute('PRAGMA table_info(tasks)')}
@@ -100,7 +115,9 @@ def _initialize(db, path):
     db.execute('CREATE INDEX IF NOT EXISTS idx_tasks_project_status_position ON tasks(project_id,status,position,id)')
     db.execute('CREATE INDEX IF NOT EXISTS idx_tasks_project_assignee ON tasks(project_id,assignee_user_id)')
     db.execute('CREATE INDEX IF NOT EXISTS idx_memberships_user ON memberships(user_id,project_id,role_id)')
-    # v1: task versions and project owners; v2: requirement versions/archive.
+    db.execute('CREATE INDEX IF NOT EXISTS idx_audit_project_time ON audit_events(project_id,created_at,id)')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_events(entity_type,entity_id,id)')
+    # v1: task versions and project owners; v2: requirement versions/archive; v3: audit trail.
     db.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
 
 
