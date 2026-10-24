@@ -20,9 +20,17 @@ ROOT = Path(__file__).resolve().parent
 SESSION_TTL = 2 * 60 * 60
 LOGIN_WINDOW = 60
 LOGIN_LIMIT = 5
+LOGIN_IP_LIMIT = 20
+LOGIN_TRACK_LIMIT = 10_000
 SESSION_LIMIT = 5
 REJECT_DRAIN_LIMIT = 1024 * 1024
 REJECT_DRAIN_TIMEOUT = 0.2
+CONTROL_CHARACTERS = re.compile(r'[\x00-\x1f\x7f-\x9f]')
+
+
+def sanitize_log(text):
+    """转义控制字符，防止伪造换行或终端转义序列进入日志。"""
+    return CONTROL_CHARACTERS.sub(lambda match: '\\x%02x' % ord(match.group()), text)
 
 
 class LocalServer(ThreadingHTTPServer):
@@ -84,11 +92,13 @@ class Handler(BaseHTTPRequestHandler):
     def end_headers(self):
         self.send_header('X-Frame-Options', 'DENY')
         self.send_header('Referrer-Policy', 'no-referrer')
+        self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
+        self.send_header('Cross-Origin-Resource-Policy', 'same-origin')
         self.send_header('Content-Security-Policy', "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
         super().end_headers()
 
     def log_message(self, format_string, *args):
-        print('%s - %s' % (self.address_string(), format_string % args))
+        print('%s - %s' % (self.address_string(), sanitize_log(format_string % args)))
 
     def finish(self):
         try:
@@ -231,6 +241,34 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    @staticmethod
+    def _tracked_failure(table, key):
+        """限速表键数有上限：攻击者伪造大量账号时淘汰最早的键，防止内存耗尽。"""
+        if key not in table and len(table) >= LOGIN_TRACK_LIMIT:
+            del table[next(iter(table))]
+        return table.setdefault(key, deque())
+
+    def throttle_login(self, data, now):
+        """按（账号，IP）与按 IP 双重限速：后者阻断跨账号密码喷洒。"""
+        for table in (self.server.login_failures, self.server.login_ip_failures):
+            for key, history in list(table.items()):
+                while history and history[0] <= now - LOGIN_WINDOW:
+                    history.popleft()
+                if not history:
+                    del table[key]
+        email = data.get('email', '')
+        account = email.strip().lower()[:120] if isinstance(email, str) else ''
+        ip = self.client_address[0]
+        failures = self._tracked_failure(self.server.login_failures, (account, ip))
+        ip_failures = self._tracked_failure(self.server.login_ip_failures, ip)
+        retry_after = None
+        if len(failures) >= LOGIN_LIMIT:
+            delay = min(LOGIN_WINDOW, 2 ** min(len(failures) - LOGIN_LIMIT, 6))
+            retry_after = failures[-1] + delay - now
+        if (retry_after is None or retry_after <= 0) and len(ip_failures) >= LOGIN_IP_LIMIT:
+            retry_after = ip_failures[-1] + LOGIN_WINDOW - now
+        return failures, ip_failures, retry_after, (account, ip), ip
+
     def user(self):
         session = self.server.sessions.get(self.token())
         if session is None or session[1] <= self.server.clock():
@@ -308,9 +346,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._drain_rejected_body = True
             self.reply({'error': str(exc)}, exc.status)
         except (ConnectionError, TimeoutError):
-            logging.warning('Request interrupted or timed out: %s', self.path)
+            logging.warning('Request interrupted or timed out: %s', sanitize_log(self.path))
         except Exception:
-            logging.exception('Unhandled request error: %s %s', method, self.path)
+            logging.exception('Unhandled request error: %s %s', method, sanitize_log(self.path))
             self.reply({'error': '服务器内部错误，请稍后重试。'}, 500)
 
     def dispatch_request(self, method):
@@ -325,29 +363,22 @@ class Handler(BaseHTTPRequestHandler):
             if method == 'POST' and path == '/api/login':
                 now = self.server.clock()
                 data = self.payload()
-                for key, history in list(self.server.login_failures.items()):
-                    while history and history[0] <= now - LOGIN_WINDOW:
-                        history.popleft()
-                    if not history:
-                        del self.server.login_failures[key]
-                email = data.get('email', '')
-                account = email.strip().lower()[:120] if isinstance(email, str) else ''
-                key = (account, self.client_address[0])
-                failures = self.server.login_failures.setdefault(key, deque())
-                if len(failures) >= LOGIN_LIMIT:
-                    delay = min(LOGIN_WINDOW, 2 ** min(len(failures) - LOGIN_LIMIT, 6))
-                    remaining = failures[-1] + delay - now
-                    if remaining > 0:
-                        self._retry_after = max(1, int(remaining + 0.999))
-                        raise AppError('登录失败次数过多，请稍后重试。', 429)
+                failures, ip_failures, retry_after, account_key, ip_key = self.throttle_login(data, now)
+                if retry_after is not None and retry_after > 0:
+                    self._retry_after = max(1, int(retry_after + 0.999))
+                    raise AppError('登录失败次数过多，请稍后重试。', 429)
                 try:
                     user = self.store.authenticate(data.get('email', ''), data.get('password', ''))
                 except AppError as error:
                     if error.status == 401:
-                        failures.append(self.server.clock())
+                        stamp = self.server.clock()
+                        failures.append(stamp)
+                        ip_failures.append(stamp)
                     raise
                 failures.clear()
-                self.server.login_failures.pop(key, None)
+                ip_failures.clear()
+                self.server.login_failures.pop(account_key, None)
+                self.server.login_ip_failures.pop(ip_key, None)
                 token = self.new_session(user)
                 return self.reply(user, cookie=token)
             if method == 'POST' and path == '/api/logout':
@@ -572,6 +603,7 @@ def create_server(db_path, port=8765):
     server.sessions = {}
     server.csrf_secret = secrets.token_bytes(32)
     server.login_failures = defaultdict(deque)
+    server.login_ip_failures = defaultdict(deque)
     server.clock = time.monotonic
     try:
         server.store = Store(db_path)

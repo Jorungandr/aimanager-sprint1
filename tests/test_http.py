@@ -13,7 +13,7 @@ from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_ope
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from server import create_server, Handler, LocalServer, SESSION_TTL, SESSION_LIMIT, LOGIN_WINDOW, LOGIN_LIMIT, REJECT_DRAIN_LIMIT, REJECT_DRAIN_TIMEOUT
+from server import create_server, Handler, LocalServer, SESSION_TTL, SESSION_LIMIT, LOGIN_WINDOW, LOGIN_LIMIT, LOGIN_IP_LIMIT, REJECT_DRAIN_LIMIT, REJECT_DRAIN_TIMEOUT, sanitize_log
 from service import AppError
 
 
@@ -645,6 +645,65 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(failure.exception.code, 403)
         self.assertNotEqual(self.csrf_token(self.member), token)
         self.assertEqual(self.req(self.member, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})[0], 201)
+
+
+    def test_login_spraying_across_accounts_is_ip_throttled(self):
+        """单账号限速键含账号名；同一 IP 跨账号喷洒由 IP 全局上限阻断。"""
+        self.server.clock = lambda: 1000.0
+        self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
+        with patch('server.LOGIN_IP_LIMIT', 3):
+            for index in range(3):
+                self.assertEqual(self.req(self.member, '/api/login', 'POST',
+                                          {'email': f'spray{index}@example.test', 'password': 'wrong'})[0], 401)
+            self.assertEqual(self.req(self.member, '/api/login', 'POST',
+                                      {'email': 'admin@example.test', 'password': 'AdminPass123'})[0], 429)
+            self.assertEqual(self.req(self.member, '/api/login', 'POST',
+                                      {'email': 'spray3@example.test', 'password': 'wrong'})[0], 429)
+            now = 1000.0 + LOGIN_WINDOW + 1
+            self.server.clock = lambda: now
+            self.assertEqual(self.req(self.member, '/api/login', 'POST',
+                                      {'email': 'admin@example.test', 'password': 'AdminPass123'})[0], 200)
+        self.assertEqual(self.server.login_ip_failures, {})
+
+    def test_successful_login_does_not_lift_ip_throttle_set_by_other_accounts(self):
+        """被账号限速挡下的尝试不计数；跨账号失败在 IP 层持续累计并阻断正确密码。"""
+        self.server.clock = lambda: 1000.0
+        self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
+        with patch('server.LOGIN_IP_LIMIT', 6):
+            for _ in range(5):
+                self.assertEqual(self.req(self.member, '/api/login', 'POST',
+                                          {'email': 'spray@example.test', 'password': 'wrong'})[0], 401)
+            # 单账号达到上限后进入指数退避，且不再累计失败
+            self.assertEqual(self.req(self.member, '/api/login', 'POST',
+                                      {'email': 'spray@example.test', 'password': 'wrong'})[0], 429)
+            # 换一个全新账号仍可尝试并计入 IP 失败
+            self.assertEqual(self.req(self.member, '/api/login', 'POST',
+                                      {'email': 'other@example.test', 'password': 'wrong'})[0], 401)
+            self.assertEqual(self.req(self.member, '/api/login', 'POST',
+                                      {'email': 'admin@example.test', 'password': 'AdminPass123'})[0], 429)
+
+    def test_rate_limit_tables_stay_bounded_under_account_flooding(self):
+        """伪造大量不存在的账号不会让限速表无限增长。"""
+        self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
+        with patch('server.LOGIN_TRACK_LIMIT', 2):
+            for index in range(5):
+                self.assertEqual(self.req(self.member, '/api/login', 'POST',
+                                          {'email': f'burst{index}@example.test', 'password': 'wrong'})[0], 401)
+        self.assertLessEqual(len(self.server.login_failures), 2)
+        self.assertLessEqual(len(self.server.login_ip_failures), 2)
+
+    def test_log_sanitizer_escapes_control_characters(self):
+        self.assertEqual(sanitize_log('GET /x\r\nInjected: HTTP/1.1'),
+                         'GET /x\\x0d\\x0aInjected: HTTP/1.1')
+        self.assertEqual(sanitize_log('\x1b[31mred\x1b[0m\x7f'), '\\x1b[31mred\\x1b[0m\\x7f')
+        self.assertEqual(sanitize_log('正常文本保持不变-蜂鸟'), '正常文本保持不变-蜂鸟')
+
+    def test_responses_carry_cross_origin_isolation_headers(self):
+        with self.member.open(self.base + '/api/status', timeout=2) as response:
+            self.assertEqual(response.headers['Cross-Origin-Opener-Policy'], 'same-origin')
+            self.assertEqual(response.headers['Cross-Origin-Resource-Policy'], 'same-origin')
+        with self.member.open(self.base + '/', timeout=2) as response:
+            self.assertEqual(response.headers['Cross-Origin-Opener-Policy'], 'same-origin')
 
 
 if __name__ == '__main__': unittest.main()
