@@ -1050,11 +1050,11 @@ footer {
 }
 @media (max-width: 420px) {
     .project-hero-content {
-        width: 48%;
+        width: 50%;
         padding: 22px 0 20px 20px;
     }
     .project-hero-content h3 {
-        font-size: 20px;
+        font-size: 18px;
     }
     .project-hero-message {
         font-size: 11px;
