@@ -461,6 +461,10 @@ form[data-conflict="true"] [type="submit"] { opacity: .55; cursor: not-allowed; 
     .requirement-actions button { min-height: 44px; padding: 6px 12px; font-size: 13px; }
     .member-list button { min-height: 44px; padding: 6px 12px; }
 }
+@media (max-width: 700px) {
+    .kpi-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+    .insight-card { padding: 16px 14px; }
+}
 @media (max-width: 420px) {
     .workspace-nav button { padding: 8px 10px; font-size: 13px; }
     .task-actions { flex-direction: column; align-items: stretch; }
@@ -470,6 +474,70 @@ form[data-conflict="true"] [type="submit"] { opacity: .55; cursor: not-allowed; 
     .requirement-actions { width: 100%; margin-left: 0; }
     .requirement-actions button { flex: 1 1 auto; min-height: 44px; }
 }
+
+/* ---------- 数据概览（Sprint 3） ---------- */
+.scope-note { margin: 0; color: var(--muted); font-size: 13px; }
+.insight-card {
+    margin-top: 18px; padding: 18px 20px;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius-md); box-shadow: var(--shadow-sm);
+}
+.insight-card h3 { margin-bottom: 4px; }
+.insight-card > .hint { margin: 0 0 12px; }
+.kpi-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px; margin: 14px 0 4px;
+}
+.kpi {
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 14px 16px; text-align: left;
+    border: 1px solid var(--line); border-radius: var(--radius-sm);
+    background: var(--surface-soft);
+}
+button.kpi { cursor: pointer; font: inherit; color: var(--ink); }
+button.kpi:hover { border-color: var(--accent); background: var(--accent-soft); }
+.kpi-label { color: var(--muted); font-size: 12.5px; }
+.kpi-value { font-size: 26px; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.kpi-note { color: var(--muted); font-size: 12px; }
+.insight-drill {
+    margin-top: 16px; padding: 12px 14px;
+    border: 1px dashed var(--line-strong); border-radius: var(--radius-sm);
+    background: var(--surface-soft);
+}
+.insight-drill:focus { outline: none; }
+.insight-drill:focus-visible { outline: 3px solid #59a7c0; outline-offset: 2px; }
+.insight-drill h4 { margin: 0 0 8px; }
+.chart-scroll { overflow-x: auto; padding-bottom: 4px; }
+.chart { display: block; width: 100%; height: auto; max-height: 260px; }
+.chart-bar { fill: var(--accent); cursor: pointer; }
+.chart-bar:hover, .chart-bar:focus-visible { fill: var(--accent-strong); }
+.chart-bar:focus-visible { outline: 3px solid #59a7c0; outline-offset: 2px; }
+.chart-bar-done { fill: var(--accent-strong); opacity: .85; pointer-events: none; }
+.chart-axis { stroke: var(--line-strong); stroke-width: 1; }
+.chart-line { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+.chart-dot { fill: var(--surface); stroke: var(--accent); stroke-width: 2.5; cursor: pointer; }
+.chart-dot:hover, .chart-dot:focus-visible { fill: var(--accent); }
+.chart-label { fill: var(--muted); font-size: 15px; }
+.chart-value { fill: var(--ink); font-size: 17px; font-weight: 600; }
+.insight-card .table-scroll { overflow-x: auto; }
+.insight-card .table-scroll::after { content: none; }
+.mini-table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 360px; }
+.mini-table th, .mini-table td {
+    padding: 8px 10px; border-bottom: 1px solid var(--line);
+    text-align: left; vertical-align: top;
+}
+.mini-table th { background: var(--surface-soft); color: var(--muted); font-weight: 600; font-size: 12.5px; }
+.mini-table .numeric { text-align: right; font-variant-numeric: tabular-nums; }
+.mini-table tr:last-child td { border-bottom: none; }
+button.small { min-height: 32px; padding: 4px 12px; font-size: 13px; }
+@media (max-width: 700px), (pointer: coarse) {
+    button.small { min-height: 44px; }
+}
+.audit-list { margin: 10px 0 0; padding-left: 20px; color: var(--ink-soft); font-size: 13.5px; }
+.audit-list li { margin-bottom: 6px; }
+.audit-time { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 8px; }
+.risk-overdue { color: var(--danger); font-weight: 600; }
+.risk-soon { color: #9a6b12; font-weight: 600; }
 
 /* ---------- 无障碍 ---------- */
 :focus-visible { outline: 3px solid #59a7c0; outline-offset: 2px; }
