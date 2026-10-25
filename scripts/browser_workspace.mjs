@@ -73,6 +73,7 @@ try {
         assert.equal(response.status(), 201, await response.text());
         return response.json();
     }
+    await create('/api/users', { email: 'member@example.test', password: 'MemberPass123' });
     const project = await create('/api/projects', { name: '爱管理 · 团队协作' });
     const second = await create('/api/projects', { name: '蜂鸟 · 发布验收' });
     const requirement = await create(`/api/projects/${project.id}/requirements`, {
@@ -142,6 +143,69 @@ try {
             '较早点击的延迟响应不得覆盖较新的明细。');
         assert.equal(await page.locator('#insightDrill').getAttribute('aria-busy'), null);
         await page.unroute('**/stats/tasks?**');
+
+        let keyboardRequests = 0;
+        const countKeyboardRequests = request => {
+            if (request.url().includes('/stats/tasks?')) {
+                keyboardRequests += 1;
+            }
+        };
+        page.on('request', countKeyboardRequests);
+        const completedKpi = page.getByRole('button', { name: '已完成 2，查看任务明细' });
+        await completedKpi.focus();
+        const keyboardResponse = page.waitForResponse(response => response.url().includes('/stats/tasks?'));
+        await completedKpi.press('Enter');
+        await keyboardResponse;
+        await page.waitForFunction(() => document.querySelector('#insightDrill')?.getAttribute('aria-busy') === null);
+        await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 100)));
+        page.off('request', countKeyboardRequests);
+        assert.equal(keyboardRequests, 1, '原生按钮按一次回车只能发出一次明细请求。');
+        await page.route(`**/api/projects/${project.id}/stats`, route => route.fulfill({
+            status: 503, contentType: 'application/json', body: JSON.stringify({ error: '统计暂时不可用' }),
+        }));
+        await page.locator('[data-view="insights"]').click();
+        await page.getByRole('button', { name: '重试加载统计' }).waitFor();
+        await page.unroute(`**/api/projects/${project.id}/stats`);
+        await page.getByRole('button', { name: '重试加载统计' }).click();
+        await page.locator('.kpi-value').first().waitFor();
+
+
+        await page.locator('[data-view="collaboration"]').click();
+        let releaseProject;
+        let projectStarted;
+        const projectPending = new Promise(resolve => { releaseProject = resolve; });
+        const projectIntercepted = new Promise(resolve => { projectStarted = resolve; });
+        await page.route(`**/api/projects/${second.id}/tasks`, async route => {
+            projectStarted();
+            await projectPending;
+            await route.continue();
+        });
+        await page.locator('#projectPicker').selectOption(String(second.id));
+        await projectIntercepted;
+        assert.equal(await page.locator('#projects').getAttribute('aria-busy'), 'true');
+        assert.equal(await page.getByRole('status').filter({ hasText: '正在加载蜂鸟' }).count(), 1);
+        await page.locator('#projectPicker').selectOption(String(project.id));
+        await page.locator('.task-card').first().waitFor();
+        releaseProject();
+        await page.unroute(`**/api/projects/${second.id}/tasks`, { behavior: 'wait' });
+        assert.match(await page.locator('.project-hero h3').innerText(), /爱管理/);
+        assert.equal(await page.locator('#checkProject').inputValue(), String(project.id));
+        assert.equal(await page.locator('#projects').getAttribute('aria-busy'), null);
+
+        await page.route(`**/api/projects/${second.id}/tasks`, route => route.fulfill({
+            status: 503, contentType: 'application/json', body: JSON.stringify({ error: '测试中的暂时故障' }),
+        }));
+        await page.locator('#projectPicker').selectOption(String(second.id));
+        await page.getByRole('button', { name: '重试加载项目' }).waitFor();
+        assert.equal(await page.locator('#projects').getAttribute('aria-busy'), null);
+        await page.unroute(`**/api/projects/${second.id}/tasks`);
+        await page.getByRole('button', { name: '重试加载项目' }).click();
+        await page.locator('.project-hero h3').filter({ hasText: '蜂鸟' }).waitFor();
+        await page.locator('#projectPicker').selectOption(String(project.id));
+        await page.locator('.task-card').first().waitFor();
+        await page.locator('[data-view="insights"]').click();
+        await page.locator('.kpi-value').first().waitFor();
+
     }
     for (const width of [768, 390]) {
         await page.setViewportSize({ width, height: 900 });
@@ -157,11 +221,48 @@ try {
         await page.locator('.task-card').first().waitFor();
         await page.screenshot({ path: path.join(output, 'board-mobile.png'), fullPage: true });
         await page.locator('.project-hero').screenshot({ path: path.join(output, 'project-cover-mobile.png') });
+        let releaseAccount;
+        let accountStarted;
+        let accountFinished;
+        const accountPending = new Promise(resolve => { releaseAccount = resolve; });
+        const accountIntercepted = new Promise(resolve => { accountStarted = resolve; });
+        const accountSettled = new Promise(resolve => { accountFinished = resolve; });
+        let heldAccount = false;
+        await page.route('**/api/me', async route => {
+            if (heldAccount) {
+                await route.continue();
+                return;
+            }
+            heldAccount = true;
+            const response = await route.fetch();
+            accountStarted();
+            await accountPending;
+            await route.fulfill({ response });
+            accountFinished();
+        });
+        await page.locator('#refreshWorkspace').click();
+        await accountIntercepted;
         await page.locator('#logout').click();
         await page.locator('#loginPanel').waitFor({ state: 'visible' });
         assert.equal(await page.locator('#insightBody > *').count(), 0,
             '退出后清空上一账号的数据概览。');
         await page.screenshot({ path: path.join(output, 'login-mobile.png'), fullPage: true });
+        assert.equal(await page.locator('#projects > *').count(), 0);
+        assert.equal(await page.locator('#currentUser').innerText(), '—');
+        await page.locator('#loginForm input[name="email"]').fill('member@example.test');
+        await page.locator('#loginForm input[name="password"]').fill('MemberPass123');
+        await page.locator('#loginForm button').click();
+        await page.locator('#workspace').waitFor({ state: 'visible' });
+        await page.waitForFunction(() => document.querySelector('#currentUser')?.textContent === 'member@example.test');
+        releaseAccount();
+        await accountSettled;
+        await page.waitForFunction(() => !document.querySelector('#refreshWorkspace').disabled);
+        await page.unroute('**/api/me');
+        assert.equal(await page.locator('#currentUser').innerText(), 'member@example.test',
+            '旧账号的延迟刷新不能覆盖重新登录的账号。');
+        assert.equal(await page.locator('#roleForm').isVisible(), false);
+        assert.equal(await page.locator('.task-card').count(), 0);
+
     }
     assert.deepEqual(errors, [], '浏览器不应出现未捕获错误。');
     console.log('PASS 工作台切换、项目范围、响应式布局与截图');
