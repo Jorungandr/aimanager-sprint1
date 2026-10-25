@@ -1067,3 +1067,92 @@ footer {
         padding: 16px 20px;
     }
 }
+
+/* 加载与失败反馈保持稳定占位，避免网络较慢时出现大片空白。 */
+.workspace-loading, .workspace-load-error {
+    padding: 24px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: var(--surface);
+}
+.loading-label {
+    margin: 0 0 20px;
+    color: var(--muted);
+}
+.loading-preview {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+}
+.loading-placeholder {
+    display: block;
+    height: 180px;
+    border-radius: 10px;
+    background: linear-gradient(110deg, #edf1ea 25%, #f7f9f4 45%, #edf1ea 65%);
+    background-size: 240% 100%;
+    animation: workspace-loading 1.8s ease-in-out infinite;
+}
+@keyframes workspace-loading {
+    to {
+        background-position: -240% 0;
+    }
+}
+.project-focus .focus-task {
+    padding: 11px 0;
+    white-space: normal;
+}
+.focus-task-title {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    font-weight: 500;
+}
+.focus-task-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 11px;
+}
+.focus-status {
+    padding: 1px 6px;
+    border: 1px solid #d9dfcf;
+    border-radius: 4px;
+    background: #edf0e3;
+    color: #506049;
+}
+.focus-status-doing {
+    border-color: #e2d6af;
+    background: #f5edcf;
+    color: #795e24;
+}
+.focus-task.is-overdue .focus-due-date {
+    color: #954635;
+}
+.workspace-load-error h3 {
+    margin-top: 0;
+}
+#insightBody > .empty-state {
+    grid-column: 1 / -1;
+}
+#insightBody > .empty-state button {
+    display: block;
+    margin: 16px auto 0;
+}
+@media (max-width: 800px) {
+    .loading-preview {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .loading-placeholder {
+        height: 120px;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .loading-placeholder {
+        animation: none;
+    }
+}

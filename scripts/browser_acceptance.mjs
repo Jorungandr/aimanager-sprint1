@@ -152,7 +152,7 @@ async function bootstrap(adminContext, adminPage, baseURL) {
     await adminPage.reload();
     await adminPage.locator('#workspace').waitFor({ state: 'visible' });
     await adminPage.getByRole('heading', { name: project.name }).waitFor();
-    await adminPage.getByText(task.title, { exact: true }).waitFor();
+    await adminPage.locator('.task-card').getByText(task.title, { exact: true }).waitFor();
     return { project, task, viewer };
 }
 
@@ -170,7 +170,7 @@ async function main() {
 
     await check('只读成员可查看，但不能创建、编辑或变更状态', async () => {
         await viewerPage.getByRole('heading', { name: fixtures.project.name }).waitFor();
-        await viewerPage.getByText(fixtures.task.title, { exact: true }).waitFor();
+        await viewerPage.locator('.task-card').getByText(fixtures.task.title, { exact: true }).waitFor();
         assert.equal(await viewerPage.locator('.workitem-forms').count(), 0, '只读成员不应看到新增需求或任务表单。');
         assert.equal(await viewerPage.locator('.project button.danger').count(), 0, '只读成员不应看到成员移除按钮。');
         assert.equal(await viewerPage.locator('.task-card[draggable="true"]').count(), 0, '只读成员的任务卡不得可拖动。');
@@ -211,7 +211,7 @@ async function main() {
     await adminPage.reload();
     await adminPage.locator('#workspace').waitFor({ state: 'visible' });
     await adminPage.getByRole('heading', { name: fixtures.project.name }).waitFor();
-    await adminPage.getByText(fixtures.task.title, { exact: true }).waitFor();
+    await adminPage.locator('.task-card').getByText(fixtures.task.title, { exact: true }).waitFor();
 
     await check('筛选无结果后可通过“清除筛选”恢复任务', async () => {
         const filter = adminPage.locator([
@@ -227,7 +227,7 @@ async function main() {
         assert.equal(await clear.count(), 1, '无结果状态应显示唯一的“清除筛选”按钮。');
         await clear.focus();
         await adminPage.keyboard.press('Enter');
-        await adminPage.getByText(fixtures.task.title, { exact: true }).waitFor();
+        await adminPage.locator('.task-card').getByText(fixtures.task.title, { exact: true }).waitFor();
         assert.equal(await filter.inputValue(), '', '清除筛选后输入值应为空。');
     });
 
@@ -256,7 +256,7 @@ async function main() {
         await adminPage.reload();
         await adminPage.locator('#workspace').waitFor({ state: 'visible' });
         await adminPage.getByRole('heading', { name: fixtures.project.name }).waitFor();
-        await adminPage.getByText(fixtures.task.title, { exact: true }).waitFor();
+        await adminPage.locator('.task-card').getByText(fixtures.task.title, { exact: true }).waitFor();
         const audit = await adminPage.evaluate(() => {
             const visible = element => {
                 const style = getComputedStyle(element);

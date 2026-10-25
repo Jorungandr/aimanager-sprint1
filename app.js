@@ -16,6 +16,9 @@ function recordPanel(projectId, name, open) {
   panelState.set(projectId, state);
 }
 let csrfRequest = null;
+let refreshRequest = 0;
+let sessionRevision = 0;
+let permissionCheckRequest = 0;
 /* 服务端错误统一转成面向用户的提示：不把状态码抛给用户，保留业务原因。 */
 const statusFallback = {
   400: '提交内容不符合要求，请检查后重试。',
@@ -50,8 +53,14 @@ function closeDialogs() {
   dialogOpener = null;
 }
 /* 登录过期统一收口：清空编辑上下文、关闭弹窗、回到登录页并说明原因。 */
-function enterLoggedOut() {
+function enterLoggedOut(expired = true) {
+  refreshRequest += 1;
+  sessionRevision += 1;
   current = null;
+  roles = [];
+  roleOptions = [];
+  users = [];
+  projects = [];
   syncShell();
   projectRequest += 1;
   closeDialogs();
@@ -64,9 +73,21 @@ function enterLoggedOut() {
   $('loginPanel').hidden = false;
   $('projects').replaceChildren();
   $('projectPicker').replaceChildren(option('', '暂无项目'));
-  say('登录已过期，请重新登录。未保存的编辑内容已关闭。', true);
+  $('projectPicker').disabled = true;
+  $('currentUser').textContent = '—';
+  $('currentUser').title = '';
+  $('roleCount').textContent = '0';
+  $('projectCount').textContent = '0';
+  for (const id of ['roleForm', 'userForm', 'projectForm']) {
+    $(id).reset();
+  }
+  renderCheckProjects();
+  $('checkResult').textContent = '';
+  renderMatrix();
+  say(expired ? '登录已过期，请重新登录。未保存的编辑内容已关闭。' : '已安全退出', expired);
 }
 async function api(path, options = {}) {
+    const revision = sessionRevision;
     const headers = { 'Content-Type': 'application/json', ...options.headers };
     if (['POST', 'PUT', 'DELETE'].includes((options.method || 'GET').toUpperCase())) {
         if (!csrfRequest) {
@@ -94,7 +115,7 @@ async function api(path, options = {}) {
         throw new Error('服务器响应格式异常，请刷新重试。', { cause });
     }
     if (!response.ok) {
-        if (response.status === 401 && current) {
+        if (response.status === 401 && current && revision === sessionRevision) {
             enterLoggedOut();
         }
         const error = new Error(describeError(response.status, data.error));
@@ -161,17 +182,29 @@ async function submit(form, path, after, method = 'POST') {
 function cell(text) { const td = document.createElement('td'); td.textContent = text; return td; }
 function option(value, text) { const item = document.createElement('option'); item.value = value; item.textContent = text; return item; }
 async function refresh() {
+  const request = ++refreshRequest;
+  let account;
   try {
-    current = await api('/api/me');
+    account = await api('/api/me');
   } catch (error) {
     if (error.status !== 401) {
       throw error;
     }
-    current = null;
+    account = null;
   }
+  if (request !== refreshRequest) {
+    return;
+  }
+  current = account;
   syncShell();
   $('setupPanel').hidden = true; $('loginPanel').hidden = true; $('workspace').hidden = !current; $('logout').hidden = !current;
-  if (!current) { const status = await api('/api/status'); $(status.needs_setup ? 'setupPanel' : 'loginPanel').hidden = false; return; }
+  if (!current) {
+    const status = await api('/api/status');
+    if (request === refreshRequest) {
+      $(status.needs_setup ? 'setupPanel' : 'loginPanel').hidden = false;
+    }
+    return;
+  }
   $('currentUser').textContent = current.email;
   $('currentUser').title = current.email;
   const canManageRoles = current.can_manage_roles;
@@ -179,10 +212,22 @@ async function refresh() {
   $('adminPanel').hidden = !(current.is_admin || canManageRoles || canManageProjects);
   $('roleForm').hidden = !canManageRoles; $('matrixPanel').hidden = !canManageRoles;
   $('projectForm').hidden = !canManageProjects; $('userForm').hidden = !current.is_admin;
-  roles = canManageRoles ? await api('/api/roles') : [];
-  projects = await api('/api/projects');
-  roleOptions = projects.length || canManageRoles ? await api('/api/role-options') : [];
-  users = current.is_admin ? await api('/api/users') : (current.can_manage_members ? await api('/api/user-options') : []);
+  const [nextRoles, nextProjects, nextUsers] = await Promise.all([
+    canManageRoles ? api('/api/roles') : [],
+    api('/api/projects'),
+    account.is_admin ? api('/api/users') : (account.can_manage_members ? api('/api/user-options') : []),
+  ]);
+  if (request !== refreshRequest) {
+    return;
+  }
+  const nextOptions = nextProjects.length || canManageRoles ? await api('/api/role-options') : [];
+  if (request !== refreshRequest) {
+    return;
+  }
+  roles = nextRoles;
+  projects = nextProjects;
+  users = nextUsers;
+  roleOptions = nextOptions;
   $('roleCount').textContent = roleOptions.length; $('projectCount').textContent = projects.length;
   if (!projects.some(project => String(project.id) === activeProject)) {
     activeProject = projects.length ? String(projects[0].id) : '';
@@ -205,6 +250,9 @@ async function refresh() {
   renderMatrix();
   setView(activeView);
   await renderProjects();
+  if (request !== refreshRequest) {
+    return;
+  }
   renderCheckProjects();
   if (activeView === 'insights') {
     await renderInsights();
@@ -298,38 +346,76 @@ function renderMatrix() {
     body.append(tr);
   }
 }
-async function renderProjects() {
-  const request = ++projectRequest;
-  const target = $('projects'); target.replaceChildren();
-  if (!projects.length) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    empty.textContent = '当前账号还没有可访问的项目。管理员可在“管理配置”中创建项目并把成员加入项目；普通成员请联系项目管理者分配权限。';
-    target.append(empty);
-    return;
-  }
-  for (const project of projects.filter(item => String(item.id) === activeProject)) {
-    const card = document.createElement('section'); card.className = 'project'; const title = document.createElement('h3'); title.textContent = project.name; card.append(title);
-    target.append(card);
-    try {
-      const [members, requirements, tasks] = await Promise.all([
-        api(`/api/projects/${project.id}/members`),
-        api(`/api/projects/${project.id}/requirements`),
-        api(`/api/projects/${project.id}/tasks`),
-      ]);
-      const canManageMembers = await allowed(`/api/projects/${project.id}/manage-check`);
-      const canManageWorkitems = await allowed(`/api/projects/${project.id}/workitems/manage-check`);
-      const assignableRoles = canManageMembers ? await api(`/api/projects/${project.id}/role-options`) : [];
-      if (request !== projectRequest) {
-        return;
-      }
-      renderMembers(card, project, members, canManageMembers, assignableRoles);
-      renderWorkItems(card, project, members, requirements, tasks, canManageWorkitems);
-      renderProjectIntroduction(card, project, members, requirements, tasks, canManageWorkitems);
-    } catch (error) {
-      const problem = document.createElement('p'); problem.className = 'error'; problem.textContent = error.message; card.append(problem);
+function workspaceLoading(name) {
+    const loading = el('section', 'workspace-loading');
+    loading.setAttribute('role', 'status');
+    loading.append(el('p', 'loading-label', `正在加载${name}…`));
+    const preview = el('div', 'loading-preview');
+    preview.setAttribute('aria-hidden', 'true');
+    for (let index = 0; index < 4; index += 1) {
+        preview.append(el('span', 'loading-placeholder'));
     }
-  }
+    loading.append(preview);
+    return loading;
+}
+async function renderProjects() {
+    const request = ++projectRequest;
+    const account = current;
+    const projectId = activeProject;
+    const target = $('projects');
+    const valid = () => request === projectRequest && current === account && projectId === activeProject;
+    target.removeAttribute('aria-busy');
+    target.replaceChildren();
+    if (!projects.length) {
+        const empty = el('div', 'empty-state');
+        empty.textContent = '当前账号还没有可访问的项目。管理员可在“管理配置”中创建项目并把成员加入项目；普通成员请联系项目管理者分配权限。';
+        target.append(empty);
+        return;
+    }
+    const project = projects.find(item => String(item.id) === projectId);
+    if (!project || !account) {
+        return;
+    }
+    target.setAttribute('aria-busy', 'true');
+    target.append(workspaceLoading(project.name));
+    try {
+        const [members, requirements, tasks, canManageMembers, canManageWorkitems] = await Promise.all([
+            api(`/api/projects/${project.id}/members`),
+            api(`/api/projects/${project.id}/requirements`),
+            api(`/api/projects/${project.id}/tasks`),
+            allowed(`/api/projects/${project.id}/manage-check`),
+            allowed(`/api/projects/${project.id}/workitems/manage-check`),
+        ]);
+        if (!valid()) {
+            return;
+        }
+        const assignableRoles = canManageMembers ? await api(`/api/projects/${project.id}/role-options`) : [];
+        if (!valid()) {
+            return;
+        }
+        const card = el('section', 'project');
+        card.append(el('h3', null, project.name));
+        renderMembers(card, project, members, canManageMembers, assignableRoles);
+        renderWorkItems(card, project, members, requirements, tasks, canManageWorkitems);
+        renderProjectIntroduction(card, project, members, requirements, tasks, canManageWorkitems);
+        target.replaceChildren(card);
+    } catch (error) {
+        if (!valid()) {
+            return;
+        }
+        const problem = el('section', 'workspace-load-error');
+        problem.setAttribute('role', 'alert');
+        problem.append(el('h3', null, '项目暂时未能加载'), el('p', 'error', error.message));
+        const retry = el('button', 'secondary', '重试加载项目');
+        retry.type = 'button';
+        retry.addEventListener('click', () => renderProjects().catch(cause => say(cause.message, true)));
+        problem.append(retry);
+        target.replaceChildren(problem);
+    } finally {
+        if (valid()) {
+            target.removeAttribute('aria-busy');
+        }
+    }
 }
 function localDay(value) {
     return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
@@ -402,7 +488,15 @@ function renderProjectIntroduction(card, project, members, requirements, tasks, 
     const list = el('div', 'focus-task-list');
     for (const task of queue) {
         const text = `${task.title} · ${task.due_date || statusLabels[task.status]}`;
-        const button = el('button', 'focus-task', text);
+        const button = el('button', 'focus-task');
+        button.append(el('span', 'focus-task-title', task.title));
+        const meta = el('span', 'focus-task-meta');
+        const status = el('span', `focus-status focus-status-${task.status}`, statusLabels[task.status]);
+        meta.append(status);
+        if (task.due_date) {
+            meta.append(el('span', 'focus-due-date', `${task.due_date < todayKey ? '已逾期 · ' : '截止 '}${task.due_date}`));
+        }
+        button.append(meta);
         button.type = 'button';
         button.title = text;
         button.classList.toggle('is-overdue', Boolean(task.due_date && task.due_date < todayKey));
@@ -925,6 +1019,8 @@ $('navToggle').addEventListener('click', () => {
 });
 $('projectPicker').addEventListener('change', () => {
   activeProject = $('projectPicker').value;
+  closeDialogs();
+  renderCheckProjects();
   renderProjects().catch(error => say(error.message, true));
   if (activeView === 'insights') renderInsights().catch(error => say(error.message, true));
 });
@@ -942,6 +1038,7 @@ $('refreshWorkspace').addEventListener('click', async () => {
   }
 });
 function renderCheckProjects() {
+  permissionCheckRequest += 1;
   const select = $('checkProject');
   if (projects.length) {
     select.replaceChildren(...projects.map(p => option(p.id, p.name)));
@@ -951,6 +1048,10 @@ function renderCheckProjects() {
   select.disabled = !projects.length;
   $('checkView').disabled = !projects.length;
   $('checkManage').disabled = !projects.length;
+  if (projects.length) {
+    select.value = activeProject;
+  }
+  $('checkResult').textContent = '';
   if (!projects.length) $('checkResult').textContent = '当前没有可检查的项目。请先在“管理配置”中创建项目并加入成员。';
 }
 $('setupForm').addEventListener('submit', e => { e.preventDefault(); submit(e.currentTarget, '/api/setup', refresh); });
@@ -961,16 +1062,33 @@ $('projectForm').addEventListener('submit', e => { e.preventDefault(); submit(e.
 $('logout').addEventListener('click', async () => {
   try {
     await api('/api/logout', { method: 'POST', body: '{}' });
-    filters.clear();
-    panelState.clear();
-    activeProject = '';
-    await refresh();
-    say('已安全退出');
+    enterLoggedOut(false);
   } catch (error) {
     say(error.message, true);
   }
 });
-async function check(path) { try { const data = await api(path); $('checkResult').textContent = JSON.stringify(data, null, 2); } catch (e) { $('checkResult').textContent = e.message; } }
+async function check(path) {
+    const request = ++permissionCheckRequest;
+    const account = current;
+    const project = $('checkProject').value;
+    const valid = () => request === permissionCheckRequest && account === current
+        && project === $('checkProject').value;
+    $('checkResult').textContent = '正在验证当前项目权限…';
+    try {
+        const data = await api(path);
+        if (valid()) {
+            $('checkResult').textContent = JSON.stringify(data, null, 2);
+        }
+    } catch (error) {
+        if (valid()) {
+            $('checkResult').textContent = error.message;
+        }
+    }
+}
+$('checkProject').addEventListener('change', () => {
+    permissionCheckRequest += 1;
+    $('checkResult').textContent = '';
+});
 $('checkView').addEventListener('click', () => check(`/api/projects/${$('checkProject').value}/members`));
 $('checkManage').addEventListener('click', () => check(`/api/projects/${$('checkProject').value}/manage-check`));
 refresh().catch(e => say(e.message, true));
@@ -1009,12 +1127,14 @@ function shortName(text, limit = 18) {
 }
 function activateOn(button, handler) {
   button.addEventListener('click', handler);
-  button.addEventListener('keydown', event => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      handler();
-    }
-  });
+  if (button.tagName.toLowerCase() !== 'button') {
+    button.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        handler();
+      }
+    });
+  }
 }
 async function drillTasks(target) {
     const panel = $('insightDrill');
@@ -1076,7 +1196,12 @@ async function renderInsights() {
       assigneeBlock(stats), requirementBlock(stats), riskBlock(risks), auditBlock(audit));
   } catch (error) {
     if (request === insightRequest) {
-      body.replaceChildren(insightEmpty(`无法加载统计数据：${error.message}`));
+      const problem = insightEmpty(`无法加载统计数据：${error.message}`);
+      const retry = el('button', 'secondary', '重试加载统计');
+      retry.type = 'button';
+      retry.addEventListener('click', () => renderInsights().catch(cause => say(cause.message, true)));
+      problem.append(retry);
+      body.replaceChildren(problem);
     }
   } finally {
     if (request === insightRequest) body.removeAttribute('aria-busy');
