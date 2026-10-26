@@ -318,3 +318,8 @@
         min-height: 44px;
     }
 }
+
+.creation-draft-hint {
+    grid-column: 1 / -1;
+    margin: 0;
+}
