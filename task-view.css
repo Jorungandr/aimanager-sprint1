@@ -323,3 +323,40 @@
     grid-column: 1 / -1;
     margin: 0;
 }
+
+/* 小屏阅读与操作：避免输入时自动放大，操作保持一行以缩短卡片。 */
+@media (max-width: 700px) {
+    input, select, textarea,
+    .task-controls .board-toolbar input,
+    .task-controls .board-toolbar select,
+    .task-actions select {
+        font-size: 16px;
+    }
+    .task-card strong {
+        font-size: 15px;
+        line-height: 1.65;
+    }
+    .task-card .task-person, .task-due {
+        font-size: 13px;
+        line-height: 1.6;
+    }
+    .task-actions {
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+    }
+    .task-actions select {
+        flex: 1 1 auto;
+        width: 0;
+    }
+    .task-actions button {
+        width: auto;
+        min-width: 60px;
+        padding-inline: 12px;
+        font-size: 14px;
+    }
+    dialog .hint {
+        font-size: 13px;
+        line-height: 1.75;
+    }
+}

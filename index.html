@@ -205,11 +205,11 @@
     <label>关联需求
       <select name="requirement_id"></select>
     </label>
-    <p class="hint" id="taskRequirementHint">只能关联同一项目内未归档的需求；选择“不关联”表示该任务暂不挂接需求。已归档的原关联会保留并标注“已归档”。</p>
+    <p class="hint" id="taskRequirementHint">可留空；只能新关联本项目的未归档需求，已有归档关联会保留。</p>
     <label>负责人
       <select name="assignee_user_id"></select>
     </label>
-    <p class="hint">只能指派当前项目的成员；成员被移出项目时，其负责的任务会保留并清空负责人。</p>
+    <p class="hint">可暂不指派，或选择本项目的一位成员。</p>
     <label>截止日
       <input name="due_date" type="date">
     </label>
@@ -217,7 +217,6 @@
     <label>状态
       <select name="status"></select>
     </label>
-    <p class="hint">保存时会校验版本号；若他人已修改，会提示关闭弹窗并刷新后重试，不会覆盖别人的改动。</p>
     <div class="dialog-footer">
       <p id="taskDialogError" class="error dialog-error" role="alert" tabindex="-1"></p>
       <div class="dialog-actions">
@@ -237,7 +236,7 @@
     <label>需求标题
       <input name="title" maxlength="80" required>
     </label>
-    <p class="hint">1—80 个字符。保存只改标题与说明，任务关联与创建人不变。</p>
+    <p class="hint">标题最多 80 字，请简洁描述需求。</p>
     <label>需求说明
       <textarea name="description" maxlength="500" rows="3" placeholder="可选；说明背景、边界或验收要点"></textarea>
     </label>
