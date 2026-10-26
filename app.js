@@ -8,6 +8,7 @@ let activeProject = '', activeView = 'collaboration', projectRequest = 0, editin
 const filters = new Map();
 /* 折叠面板展开状态：仅页面内存，按项目隔离；退出登录时随 filters 一起清空，不恢复旧账号界面状态 */
 const panelState = new Map();
+const creationDrafts = new Map();
 function panelOpen(projectId, name) {
   return panelState.get(projectId)?.[name] === true;
 }
@@ -67,6 +68,7 @@ function enterLoggedOut(expired = true) {
   closeDialogs();
   filters.clear();
   panelState.clear();
+  creationDrafts.clear();
   activeProject = '';
   $('workspace').hidden = true;
   $('logout').hidden = true;
@@ -151,6 +153,7 @@ async function submit(form, path, after, method = 'POST') {
   if (form.dataset.submitting === 'true') {
     return;
   }
+  const revision = sessionRevision;
   form.dataset.submitting = 'true';
   let problem = form.querySelector('[data-form-error]');
   if (!problem) {
@@ -165,6 +168,19 @@ async function submit(form, path, after, method = 'POST') {
   buttons.forEach(button => { button.disabled = true; });
   try {
     const created = await api(path, { method, body: JSON.stringify(formData(form)) });
+    if (revision !== sessionRevision) {
+        return;
+    }
+    if (form.dataset.draftKey) {
+        creationDrafts.delete(form.dataset.draftKey);
+    }
+    if (form.hasAttribute('data-create-task')) {
+        const projectId = Number(form.dataset.draftProject);
+        const state = filters.get(projectId);
+        if (state) {
+            Object.assign(state, { search: '', assignee: '', scope: 'all', sort: 'newest' });
+        }
+    }
     if (path === '/api/projects') {
       activeProject = String(created.id);
       activeView = 'collaboration';
@@ -173,6 +189,9 @@ async function submit(form, path, after, method = 'POST') {
     say('保存成功，数据已更新');
     await after();
   } catch (error) {
+    if (revision !== sessionRevision) {
+        return;
+    }
     problem.textContent = error.message;
     say(error.message, true);
   } finally {
@@ -568,6 +587,23 @@ function renderMembers(card, project, members, canManage, assignableRoles) {
   add.disabled = !assignableRoles.length || !users.length;
   form.addEventListener('submit', event => { event.preventDefault(); submit(form, `/api/projects/${project.id}/members`, refresh); }); card.append(form);
 }
+function retainCreationDraft(form, projectId, kind) {
+    const key = `${projectId}:${kind}`;
+    form.dataset.draftKey = key;
+    form.dataset.draftProject = String(projectId);
+    const draft = creationDrafts.get(key);
+    if (draft) {
+        for (const [name, value] of Object.entries(draft)) {
+            const field = form.elements.namedItem(name);
+            if (field) {
+                field.value = value;
+            }
+        }
+    }
+    const remember = () => creationDrafts.set(key, formData(form));
+    form.addEventListener('input', remember);
+    form.addEventListener('change', remember);
+}
 function renderWorkItems(card, project, members, requirements, tasks, canManage) {
   const heading = document.createElement('h4'); heading.textContent = '需求与任务看板'; card.append(heading);
   const completed = tasks.filter(task => task.status === 'done').length;
@@ -695,7 +731,10 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
     createDetails.addEventListener('toggle', () => recordPanel(project.id, 'create', createDetails.open));
     const createSummary = document.createElement('summary');
     createSummary.textContent = '新建需求或任务';
+    retainCreationDraft(requirementForm, project.id, 'requirement');
+    retainCreationDraft(taskForm, project.id, 'task');
     forms.append(requirementForm, taskForm);
+    forms.append(el('p', 'hint creation-draft-hint', '切换项目或刷新数据时保留未提交内容；重新加载页面或退出登录后清除。'));
     createDetails.append(createSummary, forms);
     card.append(createDetails);
   }

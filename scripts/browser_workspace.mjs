@@ -254,6 +254,58 @@ try {
         await page.locator('.kpi-value').first().waitFor();
 
     }
+    if (!process.env.CAPTURE_ONLY) {
+        await page.locator('[data-view="collaboration"]').click();
+        const createPanel = page.locator('details').filter({ has: page.locator('summary', { hasText: '新建需求或任务' }) });
+        const taskForm = page.locator('form[data-create-task]');
+        const requirementForm = page.locator('form').filter({ has: page.getByRole('heading', { name: '新增需求', exact: true }) });
+        await createPanel.locator('summary').click();
+        await taskForm.locator('[name="title"]').fill('用户流程：待保存任务');
+        await requirementForm.locator('[name="title"]').fill('用户流程：待保存需求');
+        await requirementForm.locator('[name="description"]').fill('第一行背景\n第二行验收');
+        await page.locator('#projectPicker').selectOption(String(second.id));
+        await page.locator('.board-empty').waitFor();
+        await page.locator('#projectPicker').selectOption(String(project.id));
+        await page.locator('.task-card').first().waitFor();
+        assert.equal(await taskForm.locator('[name="title"]').inputValue(), '用户流程：待保存任务', '切换项目不能丢失未保存的任务草稿。');
+        assert.equal(await requirementForm.locator('[name="description"]').inputValue(), '第一行背景\n第二行验收');
+        await page.locator('#refreshWorkspace').click();
+        await page.waitForFunction(() => !document.querySelector('#refreshWorkspace').disabled);
+        assert.equal(await taskForm.locator('[name="title"]').inputValue(), '用户流程：待保存任务', '刷新数据应保留草稿。');
+        await page.route(`**/api/projects/${project.id}/requirements`, route => {
+            if (route.request().method() === 'POST') {
+                return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '暂时无法保存' }) });
+            }
+            return route.continue();
+        });
+        await requirementForm.getByRole('button', { name: '保存需求' }).click();
+        await requirementForm.locator('[data-form-error]').filter({ hasText: '暂时无法保存' }).waitFor();
+        assert.equal(await requirementForm.locator('[name="title"]').inputValue(), '用户流程：待保存需求');
+        assert.equal(await requirementForm.getByRole('button', { name: '保存需求' }).isEnabled(), true);
+        await page.unroute(`**/api/projects/${project.id}/requirements`);
+        await requirementForm.getByRole('button', { name: '保存需求' }).click();
+        await page.waitForFunction(() => document.querySelector('form[data-create-task] [name="requirement_id"]')?.options.length === 3);
+        assert.equal(await requirementForm.locator('[name="title"]').inputValue(), '', '成功提交的草稿应清除。');
+        assert.equal(await taskForm.locator('[name="title"]').inputValue(), '用户流程：待保存任务', '保存需求不能清空另一张表单的任务草稿。');
+        await taskForm.locator('[name="requirement_id"]').selectOption({ label: '用户流程：待保存需求' });
+        await page.locator('[data-scope="mine"]').click();
+        await page.getByRole('searchbox', { name: '搜索任务', exact: true }).fill('不会匹配新任务');
+        await taskForm.getByRole('button', { name: '保存任务' }).click();
+        await page.locator('.task-card strong').filter({ hasText: '用户流程：待保存任务' }).waitFor();
+        assert.equal(await page.locator('.task-card').count(), 9, '保存新任务后清除遮挡结果的筛选。');
+        assert.equal(await taskForm.locator('[name="title"]').inputValue(), '');
+        await taskForm.locator('[name="title"]').fill('退出后不应保留的草稿');
+        await page.locator('#logout').click();
+        await page.locator('#loginPanel').waitFor({ state: 'visible' });
+        await page.locator('#loginForm input[name="email"]').fill('liuhaotian@example.test');
+        await page.locator('#loginForm input[name="password"]').fill('WorkspacePass123');
+        await page.locator('#loginForm button').click();
+        await page.locator('.task-card').first().waitFor();
+        await createPanel.locator('summary').click();
+        assert.equal(await taskForm.locator('[name="title"]').inputValue(), '', '退出后重新登录不得恢复旧会话草稿。');
+        await page.locator('[data-view="insights"]').click();
+        await page.locator('.kpi-value').first().waitFor();
+    }
     for (const width of [768, 390]) {
         await page.setViewportSize({ width, height: 900 });
         await page.screenshot({ path: path.join(output, `insights-${width}.png`), fullPage: true });
