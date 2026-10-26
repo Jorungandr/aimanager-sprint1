@@ -175,6 +175,13 @@ async function main() {
         assert.equal(await viewerPage.locator('.project button.danger').count(), 0, '只读成员不应看到成员移除按钮。');
         assert.equal(await viewerPage.locator('.task-card[draggable="true"]').count(), 0, '只读成员的任务卡不得可拖动。');
 
+        await viewerPage.getByRole('button', { name: '列表视图', exact: true }).click();
+        assert.equal(await viewerPage.locator('.task-list .task-card[data-readonly="true"]').count(),
+            await viewerPage.locator('.task-list .task-card').count());
+        assert.equal(await viewerPage.locator('.task-list .task-actions').count(), 0);
+        assert.equal(await viewerPage.locator('.task-list .task-status-badge').first().isVisible(), true);
+        await viewerPage.getByRole('button', { name: '看板视图', exact: true }).click();
+
         const statuses = await viewerPage.evaluate(async ({ projectId, taskId }) => {
             const { csrf_token: csrfToken } = await (await fetch('/api/csrf')).json();
             const send = (url, method, body) => fetch(url, {

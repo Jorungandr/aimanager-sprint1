@@ -80,9 +80,17 @@ try {
         title: '协作工作台体验升级', description: '让项目进度与团队分工更清晰。',
     });
     const names = ['梳理本轮用户反馈', '确认角色与访问边界', '优化任务创建流程', '实现项目数据概览', '核对移动端操作体验', '补充回归测试', '验证需求归档与恢复', '准备本轮评审演示'];
+    const account = await (await context.request.get('/api/me')).json();
+    const day = offset => {
+        const date = new Date();
+        date.setDate(date.getDate() + offset);
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    };
     for (const [index, title] of names.entries()) {
         await create(`/api/projects/${project.id}/tasks`, {
             title, requirement_id: requirement.id, status: ['backlog', 'todo', 'doing', 'done'][index % 4],
+            assignee_user_id: index === 0 ? account.id : null,
+            due_date: index === 0 ? day(-1) : (index === 1 ? day(3) : null),
         });
     }
     await page.reload();
@@ -99,6 +107,45 @@ try {
         await page.locator('#taskDialog').waitFor({ state: 'visible' });
         await page.locator('#closeTaskDialog').click();
     }
+    if (!process.env.CAPTURE_ONLY) {
+        for (const [scope, count] of [['mine', 1], ['overdue', 1], ['due_soon', 1], ['unassigned', 7], ['all', 8]]) {
+            await page.locator(`[data-scope="${scope}"]`).click();
+            assert.equal(await page.locator('.task-card').count(), count, `${scope} 快捷筛选数量应准确。`);
+            assert.equal(await page.locator('.pulse-completion strong').innerText(), '25%', '筛选不能改变项目总体完成率。');
+        }
+        await page.getByRole('button', { name: '列表视图', exact: true }).click();
+        assert.equal(await page.locator('.board.task-list .task-card').count(), 8);
+        assert.equal(await page.locator('.task-card[draggable="true"]').count(), 0, '列表只通过明确的状态控件修改，不能误拖。');
+        assert.equal(await page.locator('.task-card[data-readonly="true"]').count(), 0, '管理者列表不能误标只读。');
+        assert.equal(await page.locator('.task-card').first().evaluate(element => getComputedStyle(element, '::after').content), 'none');
+        await page.getByRole('combobox', { name: '任务排序', exact: true }).selectOption('newest');
+        assert.equal(await page.locator('.task-card strong').first().innerText(), names[7]);
+        await page.getByRole('combobox', { name: '任务排序', exact: true }).selectOption('due');
+        assert.equal(await page.locator('.task-card strong').first().innerText(), names[0]);
+        await page.locator('.task-card').first().getByRole('button', { name: '编辑', exact: true }).click();
+        await page.locator('#taskDialog').waitFor({ state: 'visible' });
+        assert.equal(await page.locator('#editTaskForm input[name="title"]').inputValue(), names[0]);
+        await page.locator('#closeTaskDialog').click();
+        await page.getByRole('searchbox', { name: '搜索任务', exact: true }).fill('不存在的任务');
+        await page.getByRole('button', { name: '清除筛选', exact: true }).waitFor();
+        await page.getByRole('button', { name: '清除筛选', exact: true }).click();
+        assert.equal(await page.locator('.board.task-list .task-card').count(), 8);
+        await page.locator('#projectPicker').selectOption(String(second.id));
+        await page.locator('.board-empty').waitFor();
+        await page.locator('#projectPicker').selectOption(String(project.id));
+        await page.locator('.board.task-list .task-card').first().waitFor();
+        await page.evaluate(() => scrollTo(0, 0));
+        await page.screenshot({ path: path.join(output, 'list-desktop.png'), fullPage: true });
+        for (const width of [768, 390, 320]) {
+            await page.setViewportSize({ width, height: 900 });
+            assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false,
+                `${width}px 列表视图不应出现页面横向溢出。`);
+        }
+        await page.screenshot({ path: path.join(output, 'list-mobile.png'), fullPage: true });
+        await page.setViewportSize({ width: 1440, height: 960 });
+        await page.getByRole('button', { name: '看板视图', exact: true }).click();
+    }
+    await page.evaluate(() => scrollTo(0, 0));
     await page.screenshot({ path: path.join(output, 'board-desktop.png'), fullPage: true });
     await page.locator('.project-hero').screenshot({ path: path.join(output, 'project-cover.png') });
     await page.locator('[data-view="insights"]').click();

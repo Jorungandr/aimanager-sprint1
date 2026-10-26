@@ -1,3 +1,4 @@
+import { localDay, taskWindow, matchesTaskScope, selectTaskView } from './task-view.mjs';
 /* 页面展示与请求。所有真正的权限判断由服务器完成。 */
 const $ = id => document.getElementById(id);
 let current = null, roles = [], roleOptions = [], users = [], projects = [];
@@ -417,9 +418,6 @@ async function renderProjects() {
         }
     }
 }
-function localDay(value) {
-    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
-}
 function renderProjectIntroduction(card, project, members, requirements, tasks, canManage) {
     const completed = tasks.filter(task => task.status === 'done').length;
     const remaining = tasks.filter(task => task.status !== 'done');
@@ -508,6 +506,7 @@ function renderProjectIntroduction(card, project, members, requirements, tasks, 
             const state = filters.get(project.id);
             state.search = task.title;
             state.assignee = '';
+            state.scope = 'all';
             renderProjects().then(() => {
                 $('projects').querySelector('.board')?.scrollIntoView({ block: 'start' });
             }).catch(error => say(error.message, true));
@@ -700,154 +699,235 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
     createDetails.append(createSummary, forms);
     card.append(createDetails);
   }
-  const state = filters.get(project.id) || { search: '', assignee: '' };
-  filters.set(project.id, state);
-  const toolbar = document.createElement('div');
-  toolbar.className = 'board-toolbar';
-  const search = document.createElement('input');
-  search.type = 'search';
-  search.placeholder = '搜索任务标题或关联需求';
-  search.setAttribute('aria-label', '搜索任务');
-  search.value = state.search;
-  const assigneeFilter = document.createElement('select');
-  assigneeFilter.setAttribute('aria-label', '按负责人筛选');
-  assigneeFilter.append(option('', '所有负责人'), option('unassigned', '未指派'));
-  members.forEach(member => assigneeFilter.append(option(member.user_id, member.email)));
-  assigneeFilter.value = state.assignee;
-  if (!tasks.length) {
-    // 没有任何任务时，筛选与四列看板都没有信息量，用一块空状态说明下一步
-    const empty = document.createElement('div');
-    empty.className = 'empty-state compact board-empty';
-    empty.textContent = canManage
-      ? '当前项目还没有任务。展开“新建需求或任务”保存第一条任务，之后可按状态在看板中推进。'
-      : '当前项目还没有任务。任务由项目管理者创建，创建后会在这里按状态分列显示。';
-    card.append(empty);
-    return;
-  }
-  toolbar.append(search, assigneeFilter);
-  card.append(toolbar);
-  const boardHint = document.createElement('p');
-  boardHint.className = 'hint';
-  boardHint.textContent = canManage
-    ? '拖拽卡片可快速改变状态；卡片内的状态下拉框提供等价的键盘操作。'
-    : '只读访问：状态与指派由具备“管理需求任务”权限的成员维护。';
-  card.append(boardHint);
-  // 筛选无结果：说明原因并提供一键清除，避免用户逐列查找空列
-  const filterEmpty = document.createElement('div');
-  filterEmpty.className = 'filter-empty';
-  filterEmpty.hidden = true;
-  const filterEmptyText = document.createElement('p');
-  const clearFilters = document.createElement('button');
-  clearFilters.type = 'button';
-  clearFilters.className = 'secondary';
-  clearFilters.textContent = '清除筛选';
-  filterEmpty.append(filterEmptyText, clearFilters);
-  card.append(filterEmpty);
-  const board = document.createElement('div'); board.className = 'board';
-  const draw = () => {
-  board.replaceChildren();
-  const visible = tasks.filter(task => {
-    const requirement = requirements.find(item => item.id === task.requirement_id);
-    return `${task.title} ${requirement?.title || ''}`.toLowerCase().includes(state.search.toLowerCase()) &&
-      (!state.assignee || (state.assignee === 'unassigned' ? !task.assignee_user_id : String(task.assignee_user_id) === state.assignee));
-  });
-  const filtering = Boolean(state.search || state.assignee);
-  filterEmptyText.textContent = `没有符合当前筛选条件的任务（本项目共 ${tasks.length} 项）。`;
-  filterEmpty.hidden = !(filtering && !visible.length);
-  for (const [status, label] of Object.entries(statusLabels)) {
-    const column = document.createElement('section'); column.className = 'board-column'; column.dataset.status = status;
-    const columnTitle = document.createElement('h5'); columnTitle.textContent = `${label} (${visible.filter(task => task.status === status).length})`; column.append(columnTitle);
-    if (canManage) {
-      column.addEventListener('dragover', event => event.preventDefault());
-      column.addEventListener('drop', async event => {
-        event.preventDefault();
-        const taskId = event.dataTransfer.getData('text/plain');
-        const task = tasks.find(item => String(item.id) === taskId);
-        if (!task) {
-          return;
-        }
-        try {
-          await api(`/api/projects/${project.id}/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify({ status, version: task.version }) });
-          say('任务状态已更新');
-          await refresh();
-        } catch (error) {
-          say(error.message, true);
-        }
-      });
+    const state = filters.get(project.id) || { search: '', assignee: '', scope: 'all', view: 'board', sort: 'default' };
+    filters.set(project.id, state);
+    const requirementMap = new Map(requirements.map(item => [item.id, item]));
+    if (!tasks.length) {
+        const empty = el('div', 'empty-state compact board-empty', canManage
+            ? '当前项目还没有任务。展开“新建需求或任务”保存第一条任务，之后可按状态在看板中推进。'
+            : '当前项目还没有任务。任务由项目管理者创建，创建后会在这里按状态分列显示。');
+        card.append(empty);
+        return;
     }
-    for (const task of visible.filter(item => item.status === status)) {
-      const item = document.createElement('article'); item.className = 'task-card'; item.draggable = canManage; item.addEventListener('dragstart', event => event.dataTransfer.setData('text/plain', task.id));
-      item.dataset.taskNumber = `任务 #${task.id}`;
-      item.dataset.status = status;
-      const name = document.createElement('strong'); name.textContent = task.title; item.append(name);
-      const meta = document.createElement('span'); meta.textContent = `${task.assignee_email || '未指派'}${task.due_date ? ` · ${task.due_date}` : ''}`; item.append(meta); column.append(item);
-      meta.className = 'task-person';
-      meta.dataset.initial = task.assignee_email ? task.assignee_email.slice(0, 1).toUpperCase() : '未';
-      const requirement = requirements.find(entry => entry.id === task.requirement_id);
-      if (requirement) {
-        const tag = document.createElement('span');
-        // 历史任务的关联即使需求已归档也要显示，并明确标注
-        tag.className = requirement.archived ? 'requirement-tag is-archived' : 'requirement-tag';
-        tag.textContent = requirement.archived ? `${requirement.title}（已归档）` : requirement.title;
-        if (requirement.archived) tag.title = '关联需求已归档：任务关联保留，恢复需求后可继续维护';
-        item.append(tag);
-      }
-      const today = new Date();
-      const localDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-      if (task.due_date && task.due_date < localDate && task.status !== 'done') {
-        meta.classList.add('overdue');
-        meta.textContent += ' · 已逾期';
-      }
-      if (canManage) {
-        const actions = document.createElement('div');
-        actions.className = 'task-actions';
-        const statusSelect = document.createElement('select');
-        statusSelect.setAttribute('aria-label', `${task.title}的状态`);
-        Object.entries(statusLabels).forEach(([key, text]) => statusSelect.append(option(key, text)));
-        statusSelect.value = task.status;
-        statusSelect.addEventListener('change', async () => {
-          statusSelect.disabled = true;
-          try {
-            await api(`/api/projects/${project.id}/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify({ status: statusSelect.value, version: task.version }) });
-            say('任务状态已更新');
-            await renderProjects();
-          } catch (error) {
-            statusSelect.value = task.status;
-            say(error.message, true);
-          } finally {
-            statusSelect.disabled = false;
-          }
+    const controls = el('section', 'task-controls');
+    controls.setAttribute('aria-label', '任务筛选与视图');
+    const toolbar = el('div', 'board-toolbar');
+    const search = el('input');
+    search.type = 'search';
+    search.placeholder = '搜索任务标题或关联需求';
+    search.setAttribute('aria-label', '搜索任务');
+    search.value = state.search;
+    const assigneeFilter = el('select');
+    assigneeFilter.setAttribute('aria-label', '按负责人筛选');
+    assigneeFilter.append(option('', '所有负责人'), option('unassigned', '未指派'));
+    members.forEach(member => assigneeFilter.append(option(member.user_id, member.email)));
+    assigneeFilter.value = state.assignee;
+    const sort = el('select');
+    sort.setAttribute('aria-label', '任务排序');
+    sort.append(option('default', '默认顺序'), option('due', '截止日优先'), option('newest', '最新创建'));
+    sort.value = state.sort || 'default';
+    toolbar.append(search, assigneeFilter, sort);
+    const lower = el('div', 'task-control-lower');
+    const scopes = el('div', 'task-scopes');
+    scopes.setAttribute('role', 'group');
+    scopes.setAttribute('aria-label', '快捷筛选任务');
+    const scopeButtons = new Map();
+    for (const [key, label] of Object.entries({ all: '全部', mine: '我负责', overdue: '已逾期', due_soon: '3天内到期', unassigned: '未指派' })) {
+        const button = el('button', 'scope-button');
+        button.type = 'button';
+        button.dataset.scope = key;
+        button.append(el('span', null, label), el('span', 'scope-count'));
+        button.addEventListener('click', () => {
+            state.scope = key;
+            draw();
         });
-        const edit = document.createElement('button');
-        edit.type = 'button';
-        edit.className = 'secondary';
-        edit.textContent = '编辑';
-        edit.addEventListener('click', () => openTaskEditor(project, task, members, requirements));
-        actions.append(statusSelect, edit);
-        item.append(actions);
-      }
+        scopeButtons.set(key, button);
+        scopes.append(button);
     }
-    if (!visible.some(task => task.status === status)) {
-      const empty = document.createElement('p');
-      empty.className = 'column-empty';
-      empty.textContent = filtering ? '无匹配任务' : '暂无任务';
-      column.append(empty);
+    const views = el('div', 'task-view-switch');
+    views.setAttribute('role', 'group');
+    views.setAttribute('aria-label', '任务展示方式');
+    const viewButtons = new Map();
+    for (const [key, label] of Object.entries({ board: '看板视图', list: '列表视图' })) {
+        const button = el('button', 'view-button', label);
+        button.type = 'button';
+        button.addEventListener('click', () => {
+            state.view = key;
+            draw();
+        });
+        viewButtons.set(key, button);
+        views.append(button);
     }
-    board.append(column);
-  }
-  };
-  search.addEventListener('input', () => { state.search = search.value.trim(); draw(); });
-  assigneeFilter.addEventListener('change', () => { state.assignee = assigneeFilter.value; draw(); });
-  clearFilters.addEventListener('click', () => {
-    state.search = '';
-    state.assignee = '';
-    search.value = '';
-    assigneeFilter.value = '';
+    lower.append(scopes, views);
+    controls.append(toolbar, lower);
+    card.append(controls);
+    const summary = el('div', 'task-results');
+    const resultCount = el('p', 'hint');
+    resultCount.setAttribute('role', 'status');
+    const reset = el('button', 'reset-task-filters', '重置条件');
+    reset.type = 'button';
+    summary.append(resultCount, reset);
+    card.append(summary);
+    const boardHint = el('p', 'hint board-help', canManage
+        ? '看板支持拖拽；列表适合逐项核对。快捷入口数量按项目全部任务计算，完成率不受筛选影响。'
+        : '只读访问：可筛选、排序和切换视图，任务由项目管理者维护。');
+    card.append(boardHint);
+    const filterEmpty = el('div', 'filter-empty');
+    filterEmpty.hidden = true;
+    const filterEmptyText = el('p');
+    const clearFilters = el('button', 'secondary', '清除筛选');
+    clearFilters.type = 'button';
+    filterEmpty.append(filterEmptyText, clearFilters);
+    card.append(filterEmpty);
+    const board = el('div', 'board');
+    function taskCard(task) {
+        const item = el('article', 'task-card');
+        item.draggable = canManage && state.view !== 'list';
+        item.addEventListener('dragstart', event => {
+            event.dataTransfer?.setData('text/plain', String(task.id));
+        });
+        item.dataset.taskNumber = `任务 #${task.id}`;
+        item.dataset.status = task.status;
+        item.dataset.readonly = String(!canManage);
+        item.append(el('strong', null, task.title));
+        const meta = el('span', 'task-person');
+        meta.append(el('span', 'task-assignee-name', task.assignee_email || '未指派'));
+        meta.dataset.initial = task.assignee_email ? task.assignee_email.slice(0, 1).toUpperCase() : '未';
+        item.append(meta);
+        const requirement = requirementMap.get(task.requirement_id);
+        if (requirement) {
+            const tag = el('span', requirement.archived ? 'requirement-tag is-archived' : 'requirement-tag',
+                requirement.archived ? `${requirement.title}（已归档）` : requirement.title);
+            if (requirement.archived) {
+                tag.title = '关联需求已归档：任务关联保留，恢复需求后可继续维护';
+            }
+            item.append(tag);
+        } else {
+            item.append(el('span', 'requirement-tag requirement-none', '未关联需求'));
+        }
+        if (task.due_date) {
+            const overdue = task.due_date < localDay(new Date()) && task.status !== 'done';
+            const due = el('span', overdue ? 'task-due is-overdue' : 'task-due', `${task.due_date}${overdue ? ' · 已逾期' : ''}`);
+            meta.append(due);
+        }
+        item.append(el('span', 'task-status-badge', statusLabels[task.status]));
+        if (canManage) {
+            const actions = el('div', 'task-actions');
+            const statusSelect = el('select');
+            statusSelect.setAttribute('aria-label', `${task.title}的状态`);
+            Object.entries(statusLabels).forEach(([key, text]) => statusSelect.append(option(key, text)));
+            statusSelect.value = task.status;
+            statusSelect.addEventListener('change', async () => {
+                statusSelect.disabled = true;
+                try {
+                    await api(`/api/projects/${project.id}/tasks/${task.id}`, {
+                        method: 'PUT', body: JSON.stringify({ status: statusSelect.value, version: task.version }),
+                    });
+                    say('任务状态已更新');
+                    await renderProjects();
+                } catch (error) {
+                    statusSelect.value = task.status;
+                    say(error.message, true);
+                } finally {
+                    statusSelect.disabled = false;
+                }
+            });
+            const edit = el('button', 'secondary', '编辑');
+            edit.type = 'button';
+            edit.addEventListener('click', () => openTaskEditor(project, task, members, requirements));
+            actions.append(statusSelect, edit);
+            item.append(actions);
+        }
+        return item;
+    }
+    const draw = () => {
+        board.replaceChildren();
+        board.classList.toggle('task-list', state.view === 'list');
+        const window = taskWindow();
+        const visible = selectTaskView(tasks, requirementMap, state, current?.id, window);
+        const filtering = Boolean(state.search || state.assignee || (state.scope && state.scope !== 'all'));
+        for (const [key, button] of scopeButtons) {
+            button.setAttribute('aria-pressed', String((state.scope || 'all') === key));
+            button.querySelector('.scope-count').textContent = tasks.filter(task => matchesTaskScope(task, key, current?.id, window)).length;
+        }
+        for (const [key, button] of viewButtons) {
+            button.setAttribute('aria-pressed', String((state.view || 'board') === key));
+        }
+        resultCount.textContent = `显示 ${visible.length} / ${tasks.length} 项任务`;
+        reset.hidden = !filtering && (!state.sort || state.sort === 'default');
+        filterEmptyText.textContent = `没有符合当前筛选条件的任务（本项目共 ${tasks.length} 项）。`;
+        filterEmpty.hidden = !(filtering && !visible.length);
+        if (state.view === 'list') {
+            const headings = el('div', 'task-list-heading');
+            headings.setAttribute('aria-hidden', 'true');
+            for (const title of ['任务', '负责人 / 截止日', '关联需求', canManage ? '操作' : '状态']) {
+                headings.append(el('span', null, title));
+            }
+            board.append(headings);
+            for (const task of visible) {
+                board.append(taskCard(task));
+            }
+            return;
+        }
+        for (const [status, label] of Object.entries(statusLabels)) {
+            const column = el('section', 'board-column');
+            column.dataset.status = status;
+            const items = visible.filter(task => task.status === status);
+            const title = el('h5', null, label);
+            title.append(el('span', 'column-count', String(items.length)));
+            column.append(title);
+            if (canManage) {
+                column.addEventListener('dragover', event => event.preventDefault());
+                column.addEventListener('drop', async event => {
+                    event.preventDefault();
+                    const taskId = event.dataTransfer.getData('text/plain');
+                    const task = tasks.find(item => String(item.id) === taskId);
+                    if (!task || task.status === status) {
+                        return;
+                    }
+                    try {
+                        await api(`/api/projects/${project.id}/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify({ status, version: task.version }) });
+                        say('任务状态已更新');
+                        await refresh();
+                    } catch (error) {
+                        say(error.message, true);
+                    }
+                });
+            }
+            items.forEach(task => column.append(taskCard(task)));
+            if (!items.length) {
+                column.append(el('p', 'column-empty', filtering ? '无匹配任务' : '暂无任务'));
+            }
+            board.append(column);
+        }
+    };
+    const clear = () => {
+        state.search = '';
+        state.assignee = '';
+        state.scope = 'all';
+        state.sort = 'default';
+        search.value = '';
+        assigneeFilter.value = '';
+        sort.value = 'default';
+        draw();
+        search.focus();
+    };
+    search.addEventListener('input', () => {
+        state.search = search.value.trim();
+        draw();
+    });
+    assigneeFilter.addEventListener('change', () => {
+        state.assignee = assigneeFilter.value;
+        draw();
+    });
+    sort.addEventListener('change', () => {
+        state.sort = sort.value;
+        draw();
+    });
+    clearFilters.addEventListener('click', clear);
+    reset.addEventListener('click', clear);
     draw();
-    search.focus();
-  });
-  draw();
-  card.append(board);
+    card.append(board);
 }
 /* ---------- 弹窗：焦点管理、冲突锁与统一提示 ---------- */
 function openDialog(id, focusName) {

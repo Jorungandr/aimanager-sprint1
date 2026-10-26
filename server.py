@@ -299,6 +299,8 @@ class Handler(BaseHTTPRequestHandler):
         allowed = {'/': ('index.html', 'text/html'), '/index.html': ('index.html', 'text/html'),
                    '/app.js': ('app.js', 'text/javascript'), '/styles.css': ('styles.css', 'text/css'),
                    '/workspace.css': ('workspace.css', 'text/css'),
+                   '/task-view.mjs': ('task-view.mjs', 'text/javascript'),
+                   '/task-view.css': ('task-view.css', 'text/css'),
                    '/assets/hummingbird.png': ('assets/hummingbird.png', 'image/png'),
                    '/assets/workspace-hummingbird.png': ('assets/workspace-hummingbird.png', 'image/png')}
         if path not in allowed:

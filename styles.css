@@ -296,9 +296,9 @@ progress::-moz-progress-bar { border-radius: 999px; background: var(--accent); }
 .task-card strong { display: block; font-size: 13.5px; font-weight: 700; line-height: 1.65; }
 .task-card > span { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; }
 .task-card .overdue { color: var(--danger); font-weight: 600; }
-/* 只读视图：无“管理需求任务”权限时 JS 将卡片标记为 draggable="false"，
+/* 只读标记由实际管理权限决定，与是否启用拖拽分开，
    用角标补足状态区分（叠加在“只读访问”文字提示之上，不单靠颜色） */
-.task-card[draggable="false"]::after {
+.task-card[data-readonly="true"]::after {
     content: "只读"; display: inline-block; margin-top: 8px; padding: 1px 8px;
     border: 1px solid var(--line-strong); border-radius: 999px;
     background: var(--surface-soft); color: var(--muted);
