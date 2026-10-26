@@ -286,7 +286,9 @@ async function refresh() {
   if (pickerHint) {
     pickerHint.textContent = projects.length
       ? '成员、需求、看板与数据概览均跟随当前项目。'
-      : '当前账号还没有可访问的项目，因此没有可切换的选项。请由项目管理者创建项目并把你加入成员。';
+      : canManageProjects
+        ? '先创建项目。创建后，你可以直接安排任务并邀请成员。'
+        : '当前账号还没有可访问的项目，因此没有可切换的选项。请由项目管理者创建项目并把你加入成员。';
   }
   renderMatrix();
   setView(activeView);
@@ -303,7 +305,7 @@ function setView(view) {
   const canAdmin = current && (current.is_admin || current.can_manage_roles || current.can_manage_projects);
   activeView = view === 'administration' && !canAdmin ? 'collaboration' : view;
   const titles = {
-    collaboration: ['项目协作', '把分工落到任务，让进展清晰可见。'],
+    collaboration: ['项目工作台', '先看需要处理的工作，再安排下一步。'],
     insights: ['数据概览', '从交付进度到到期风险，掌握项目全貌。'],
     administration: ['管理配置', '为团队建立清晰的角色、权限与项目边界。'],
     verification: ['权限验证', '核对当前账号的项目访问与成员管理权限。'],
@@ -408,9 +410,7 @@ async function renderProjects() {
     target.removeAttribute('aria-busy');
     target.replaceChildren();
     if (!projects.length) {
-        const empty = el('div', 'empty-state');
-        empty.textContent = '当前账号还没有可访问的项目。管理员可在“管理配置”中创建项目并把成员加入项目；普通成员请联系项目管理者分配权限。';
-        target.append(empty);
+        target.append(emptyWorkspace(account));
         return;
     }
     const project = projects.find(item => String(item.id) === projectId);
@@ -458,6 +458,64 @@ async function renderProjects() {
         }
     }
 }
+function bringIntoView(element) {
+    if (!element) {
+        return;
+    }
+    element.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+}
+function emptyWorkspace(account) {
+    const canCreate = Boolean(account?.can_manage_projects);
+    const empty = el('section', 'empty-state welcome-empty');
+    empty.append(el('span', 'home-eyebrow', '欢迎来到爱管理'),
+        el('h3', null, canCreate ? '先创建一个项目，把工作安排起来' : '加入项目后，从这里开始协作'),
+        el('p', 'welcome-description', canCreate
+            ? '项目是团队的工作空间。先建项目，再添加任务、安排负责人，最后跟进交付。'
+            : '当前账号还没有可访问的项目。请联系项目管理者把你加入项目，并分配适合的角色。'));
+    const steps = el('ol', 'welcome-steps');
+    for (const [title, detail] of [['建立工作空间', '用项目名称明确这次要完成什么'], ['安排具体工作', '把需求拆成任务，设置负责人和截止日'], ['一起跟进进展', '通过看板和数据概览检查推进情况']]) {
+        const row = el('li');
+        row.append(el('strong', null, title), el('span', null, detail));
+        steps.append(row);
+    }
+    empty.append(steps);
+    if (canCreate) {
+        const start = el('button', 'welcome-start', '创建第一个项目');
+        start.type = 'button';
+        start.dataset.homeStartProject = '';
+        start.addEventListener('click', () => {
+            setView('administration');
+            const field = $('projectForm').elements.name;
+            field.focus({ preventScroll: true });
+            bringIntoView(field);
+        });
+        empty.append(start);
+    } else {
+        empty.append(el('p', 'welcome-note', '加入后，你可以查看自己的分工、任务截止日和项目进度。'));
+    }
+    return empty;
+}
+function openCreation(card, kind) {
+    const switcher = card.querySelector(`[data-create-kind="${kind}"]`);
+    if (!switcher) {
+        return;
+    }
+    switcher.click();
+    const form = card.querySelector(kind === 'task' ? '[data-create-task]' : '[data-draft-key$=":requirement"]');
+    const panel = form.closest('details');
+    panel.open = true;
+    form.elements.title.focus({ preventScroll: true });
+    bringIntoView(form);
+}
+function showHomeTasks(card, scope) {
+    card.dispatchEvent(new CustomEvent('workspace-filter', { detail: scope }));
+    const board = card.querySelector('.board, .board-empty');
+    if (board) {
+        board.tabIndex = -1;
+        board.focus({ preventScroll: true });
+        bringIntoView(board);
+    }
+}
 function renderProjectIntroduction(card, project, members, requirements, tasks, canManage) {
     const completed = tasks.filter(task => task.status === 'done').length;
     const remaining = tasks.filter(task => task.status !== 'done');
@@ -483,27 +541,32 @@ function renderProjectIntroduction(card, project, members, requirements, tasks, 
     art.height = 724;
     const content = el('div', 'project-hero-content');
     const title = card.querySelector(':scope > h3');
-    content.append(title);
-    const message = !tasks.length ? '从第一条任务开始，让想法逐步成为交付。'
-        : (remaining.length ? `${remaining.length} 项任务正在等待推进，每一步协作都有迹可循。`
-            : '本轮任务已全部完成，准备迎接下一次交付。');
+    content.append(el('span', 'home-eyebrow', canManage ? '当前项目 · 安排与跟进' : '当前项目 · 查看与协作'), title);
+    const mine = tasks.filter(task => matchesTaskScope(task, 'mine', current?.id));
+    const overdueTasks = remaining.filter(task => task.due_date && task.due_date < todayKey);
+    const message = !tasks.length
+        ? (canManage ? '先添加一项任务，写清要做什么，再安排负责人和截止日。' : '管理者正在准备项目任务。你可以先查看项目成员和当前进度。')
+        : (canManage
+            ? (overdueTasks.length ? `有 ${overdueTasks.length} 项任务已逾期。先检查阻碍，再安排接下来的工作。` : `还有 ${remaining.length} 项任务待推进。查看分工与截止日，让下一步更明确。`)
+            : (mine.length ? `有 ${mine.length} 项任务分配给你。先查看状态和截止日，再与管理者确认下一步。` : '先查看团队分工与当前进展；任务由项目管理者安排。'));
     content.append(el('p', 'project-hero-message', message));
-    const action = el('button', 'hero-action', canManage ? '新建任务' : '查看项目进展');
+    const action = el('button', 'hero-action', canManage ? '新建任务' : (mine.length ? '查看我的任务' : '查看团队任务'));
     action.type = 'button';
     action.addEventListener('click', () => {
         if (canManage) {
-            const form = card.querySelector('[data-create-task]');
-            card.querySelector('[data-create-kind=task]')?.click();
-            const details = form.closest('details');
-            details.open = true;
+            openCreation(card, 'task');
             recordPanel(project.id, 'create', true);
-            form.querySelector('[name="title"]').focus();
         } else {
-            setView('insights');
-            renderInsights().catch(error => say(error.message, true));
+            showHomeTasks(card, mine.length ? 'mine' : 'all');
         }
     });
-    content.append(action);
+    const heroActions = el('div', 'home-hero-actions');
+    heroActions.append(action);
+    const next = el('button', 'home-text-action', canManage ? '查看待推进任务' : '查看所有任务');
+    next.type = 'button';
+    next.addEventListener('click', () => showHomeTasks(card, canManage ? 'open' : 'all'));
+    heroActions.append(next);
+    content.append(heroActions);
     const pulse = el('div', 'project-pulse');
     const percent = tasks.length ? Math.round(completed * 100 / tasks.length) : 0;
     const completion = el('div', 'pulse-completion');
@@ -523,7 +586,7 @@ function renderProjectIntroduction(card, project, members, requirements, tasks, 
     const overdue = risks.filter(task => task.due_date < todayKey).length;
     focus.append(el('p', 'focus-description', risks.length
         ? `${overdue} 项逾期 · ${risks.length - overdue} 项在 3 天内到期`
-        : (remaining.length ? '为正在推进的工作，留出专注时间。' : '当前任务均已完成，可以准备下一轮计划。')));
+        : (remaining.length ? '为正在推进的工作，留出专注时间。' : (tasks.length ? '当前任务均已完成，可以准备下一轮计划。' : '添加任务后，这里会提醒你需要推进的工作。'))));
     const list = el('div', 'focus-task-list');
     for (const task of queue) {
         const text = `${task.title} · ${task.due_date || statusLabels[task.status]}`;
@@ -564,8 +627,53 @@ function renderProjectIntroduction(card, project, members, requirements, tasks, 
         renderInsights().catch(error => say(error.message, true));
     });
     focus.append(list, more);
-    introduction.append(hero, focus);
-    card.prepend(introduction);
+    const metrics = el('section', 'home-metrics');
+    metrics.setAttribute('aria-label', '当前项目任务入口');
+    for (const [scope, label, count, detail] of [
+        ['open', '待推进', remaining.length, '还没有完成的工作'],
+        ['mine', '我负责', mine.length, '查看分配给我的任务'],
+        ['overdue', '已逾期', overdueTasks.length, '先检查需要协调的事项'],
+        ['due_soon', '即将到期', tasks.filter(task => matchesTaskScope(task, 'due_soon', current?.id)).length, '今天至未来3天'],
+    ]) {
+        const metric = el('button', `home-metric home-metric-${scope}`);
+        metric.type = 'button';
+        metric.dataset.homeScope = scope;
+        metric.setAttribute('aria-label', `${label} ${count} 项，查看任务`);
+        metric.append(el('span', 'home-metric-label', label), el('strong', null, String(count)), el('span', 'home-metric-note', detail));
+        metric.addEventListener('click', () => showHomeTasks(card, scope));
+        metrics.append(metric);
+    }
+    introduction.append(hero, focus, metrics);
+    const launchpad = el('section', 'home-launchpad');
+    launchpad.setAttribute('aria-label', '项目协作快捷入口');
+    const heading = el('div', 'home-section-heading');
+    heading.append(el('h4', null, canManage ? (tasks.length ? '接下来，推进你的项目' : '第一次使用，按这三步开始') : '从这里查看你的工作'),
+        el('p', null, canManage ? '从需求到分工，再到交付，每个入口都可以直接操作。' : '先看自己的分工，再了解团队整体进展。'));
+    launchpad.append(heading);
+    const entries = el('div', 'home-entry-grid');
+    const entryData = canManage ? [
+        ['01', '明确需求', '记录要解决的问题，后续任务可以关联到这里。', '创建需求', () => openCreation(card, 'requirement'), 'requirement'],
+        ['02', '安排任务', '写清工作内容，设置负责人和截止日。', '安排任务', () => openCreation(card, 'task'), 'task'],
+        ['03', '跟进进展', '查看状态、到期风险和任务完成情况。', '查看数据概览', () => { setView('insights'); renderInsights().catch(error => say(error.message, true)); }, 'insights'],
+    ] : [
+        ['01', '我的分工', '查看分配给你的任务、状态与截止日。', '查看分配给我的任务', () => showHomeTasks(card, 'mine'), 'mine'],
+        ['02', '团队任务', '了解本项目的整体安排，查找相关工作。', '浏览团队任务', () => showHomeTasks(card, 'all'), 'all'],
+        ['03', '项目进展', '从汇总指标查看任务完成情况与风险。', '查看数据概览', () => { setView('insights'); renderInsights().catch(error => say(error.message, true)); }, 'insights'],
+    ];
+    for (const [number, label, detail, buttonLabel, handler, kind] of entryData) {
+        const entry = el('article', 'home-entry');
+        entry.append(el('span', 'home-step-number', number), el('h5', null, label), el('p', null, detail));
+        const button = el('button', 'home-entry-action', buttonLabel);
+        button.type = 'button';
+        if (canManage && ['task', 'requirement'].includes(kind)) {
+            button.dataset.homeCreate = kind;
+        }
+        button.addEventListener('click', handler);
+        entry.append(button);
+        entries.append(entry);
+    }
+    launchpad.append(entries);
+    card.prepend(introduction, launchpad);
 }
 function renderMembers(card, project, members, canManage, assignableRoles) {
   const details = document.createElement('details');
@@ -940,7 +1048,7 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
         for (const [key, button] of viewButtons) {
             button.setAttribute('aria-pressed', String((state.view || 'board') === key));
         }
-        resultCount.textContent = `显示 ${visible.length} / ${tasks.length} 项任务`;
+        resultCount.textContent = `${state.scope === 'open' ? '待推进 · ' : ''}显示 ${visible.length} / ${tasks.length} 项任务`;
         reset.hidden = !filtering && (!state.sort || state.sort === 'default');
         filterEmptyText.textContent = `没有符合当前筛选条件的任务（本项目共 ${tasks.length} 项）。`;
         filterEmpty.hidden = !(filtering && !visible.length);
@@ -1013,6 +1121,16 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
     });
     clearFilters.addEventListener('click', clear);
     reset.addEventListener('click', clear);
+    card.addEventListener('workspace-filter', event => {
+        state.scope = event.detail;
+        state.search = '';
+        state.assignee = '';
+        state.sort = ['overdue', 'due_soon'].includes(state.scope) ? 'due' : 'default';
+        search.value = '';
+        assigneeFilter.value = '';
+        sort.value = state.sort;
+        draw();
+    });
     draw();
     card.append(board);
 }

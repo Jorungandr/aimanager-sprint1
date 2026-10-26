@@ -74,7 +74,22 @@ try {
         return response.json();
     }
     await create('/api/users', { email: 'member@example.test', password: 'MemberPass123' });
-    const project = await create('/api/projects', { name: '爱管理 · 团队协作' });
+    await page.locator('[data-home-start-project]').waitFor();
+    await page.screenshot({ path: path.join(output, 'welcome-desktop.png'), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, '新用户手机首页不得横向溢出。');
+    const welcomeAction = await page.locator('[data-home-start-project]').boundingBox();
+    const welcomeSteps = await page.locator('.welcome-steps').boundingBox();
+    assert.ok(welcomeAction && welcomeSteps && welcomeAction.y < welcomeSteps.y, '手机首页应先提供创建入口，再展示使用说明。');
+    await page.screenshot({ path: path.join(output, 'welcome-mobile.png'), fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 960 });
+    await page.locator('[data-home-start-project]').click();
+    assert.equal(await page.locator('#projectForm [name="name"]').evaluate(field => field === document.activeElement), true);
+    await page.locator('#projectForm [name="name"]').fill('爱管理 · 团队协作');
+    await page.locator('#projectForm [type="submit"]').click();
+    await page.locator('.project-hero h3').filter({ hasText: '爱管理' }).waitFor();
+    assert.equal(await page.locator('.home-entry').count(), 3, '空项目应提供清晰的三个起步入口。');
+    const project = (await (await context.request.get('/api/projects')).json()).find(item => item.name === '爱管理 · 团队协作');
     const second = await create('/api/projects', { name: '蜂鸟 · 发布验收' });
     const requirement = await create(`/api/projects/${project.id}/requirements`, {
         title: '协作工作台体验升级', description: '让项目进度与团队分工更清晰。',
@@ -98,6 +113,18 @@ try {
     if (!process.env.CAPTURE_ONLY) {
         await page.locator('.project-hero-art').evaluate(image => image.decode());
         assert.equal(await page.locator('.pulse-completion strong').innerText(), '25%');
+        for (const [scope, count] of [['open', 6], ['mine', 1], ['overdue', 1], ['due_soon', 1]]) {
+            await page.getByPlaceholder('搜索任务标题或关联需求').fill('不存在的搜索条件');
+            await page.locator(`[data-home-scope="${scope}"]`).click();
+            assert.equal(await page.locator('.task-card').count(), count, '首页任务入口必须显示对应任务，不能被旧筛选遮挡。');
+        }
+        await page.locator('[data-scope="all"]').click();
+        await page.locator('[data-home-create="requirement"]').click();
+        assert.equal(await page.locator('[data-draft-key$=":requirement"] [name="title"]').evaluate(field => field === document.activeElement), true);
+        await page.locator('[data-home-create="task"]').click();
+        assert.equal(await page.locator('[data-create-task] [name="title"]').evaluate(field => field === document.activeElement), true);
+        await page.locator('details').filter({ has: page.locator('[data-create-task]') }).locator('summary').click();
+
         await page.getByRole('button', { name: '新建任务', exact: true }).click();
         assert.equal(await page.locator('[data-create-task] input[name="title"]').evaluate(
             element => element === document.activeElement), true);

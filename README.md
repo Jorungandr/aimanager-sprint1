@@ -10,6 +10,8 @@
 
 ## 运行
 
+登录后默认进入项目工作台。没有项目时，管理员可从“创建第一个项目”开始；普通成员会看到加入项目的说明。已有项目将待推进、我负责、逾期和即将到期的任务放在首页，点击数字即可定位并筛选任务。管理者可直接从首页创建需求、安排任务或查看数据概览；普通成员获得对应的查看入口。新建入口会展开相应表单并聚焦标题，首页筛选会清除之前的搜索与负责人条件，避免误以为任务丢失。
+
 建议使用 Python 3.11 或更高版本（CI使用3.11），服务端使用标准库，无需安装第三方包。浏览器回归需要Node.js与Playwright。在本目录运行：
 
 ```text
@@ -44,7 +46,7 @@ python -m unittest discover -s tests -v
 
 - `server.py`：HTTP 路由与安全边界。
 - `service.py`：用户、权限、需求与任务业务规则；`database.py`：SQLite连接、原子升级、备份与索引。
-- `index.html`、`app.js`、`styles.css`、`workspace.css`：浏览器界面与工作台布局；`assets/hummingbird.png`：登录页纸艺插画。
+- `index.html`、`app.js`、`styles.css`、`workspace.css`、`home.css`：浏览器界面与工作台布局；`task-view.mjs`、`task-view.css`：任务筛选与视图；`assets/hummingbird.png`：登录页纸艺插画。
 - `tests/`：业务、HTTP边界、接口契约、数据库迁移与健康检查测试；`.github/workflows/tests.yml`：推送与拉取请求触发的全量回归流水线。
 - `scripts/check_database.py`：只读数据库健康检查；`docs/business-api.md`：实际接口与业务约定。
 - `scripts/browser_smoke.mjs`、`scripts/browser_acceptance.mjs`、`scripts/interaction_acceptance.mjs`、`scripts/browser_insights.mjs`与`scripts/browser_workspace.mjs`：覆盖业务流程、权限、筛选、键盘、移动端弹窗、防重复提交、统计下钻、跨视图项目切换和延迟响应回归；`npm run test:browser`依次执行五者。工作台脚本将桌面与手机截图保存到被忽略的 `test-results/workspace/`。

@@ -9,6 +9,9 @@ export function taskWindow(now = new Date()) {
 }
 
 export function matchesTaskScope(task, scope, userId, window = taskWindow()) {
+    if (scope === 'open') {
+        return task.status !== 'done';
+    }
     if (scope === 'mine') {
         return userId !== null && userId !== undefined && task.assignee_user_id !== null
             && task.assignee_user_id !== undefined && String(task.assignee_user_id) === String(userId);
