@@ -143,6 +143,7 @@ try {
 
     /* ---------- ③ 新增需求说明：textarea rows=3 maxlength=500，可换行，500 上限仍有效 ---------- */
     await expand('新建需求或任务');
+    await page.locator('[data-create-kind=requirement]').click();
     const requirementForm = page.locator('.workitem-forms form').first();
     const descriptionField = requirementForm.locator('textarea[name=description]');
     assert.equal(await descriptionField.getAttribute('rows'), '3', 'textarea rows 应为 3');
@@ -166,6 +167,7 @@ try {
     await expand('项目成员');
     await expand('需求列表');
     await expand('新建需求或任务');
+    await page.locator('[data-create-kind=task]').click();
     const taskForm = page.locator('.workitem-forms form').last();
     await taskForm.locator('[name=title]').fill('折叠保持用任务');
     await taskForm.getByRole('button', { name: '保存任务', exact: true }).click();

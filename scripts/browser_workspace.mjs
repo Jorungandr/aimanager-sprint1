@@ -118,6 +118,23 @@ try {
         assert.equal(await page.locator('.task-card[draggable="true"]').count(), 0, '列表只通过明确的状态控件修改，不能误拖。');
         assert.equal(await page.locator('.task-card[data-readonly="true"]').count(), 0, '管理者列表不能误标只读。');
         assert.equal(await page.locator('.task-card').first().evaluate(element => getComputedStyle(element, '::after').content), 'none');
+        await page.locator('.task-card').first().getByRole('button', { name: '编辑', exact: true }).click();
+        const editTitle = page.locator('#editTaskForm [name="title"]');
+        const beforeEdit = await editTitle.inputValue();
+        await editTitle.fill('尚未提交的修改');
+        page.once('dialog', dialog => dialog.dismiss());
+        await page.locator('#closeTaskDialog').click();
+        assert.equal(await page.locator('#taskDialog').isVisible(), true, '取消放弃应继续编辑。');
+        assert.equal(await editTitle.inputValue(), '尚未提交的修改');
+        page.once('dialog', dialog => dialog.dismiss());
+        await page.keyboard.press('Escape');
+        assert.equal(await page.locator('#taskDialog').isVisible(), true, 'Esc也应保护未保存内容。');
+        page.once('dialog', dialog => dialog.accept());
+        await page.keyboard.press('Escape');
+        await page.locator('#taskDialog').waitFor({ state: 'hidden' });
+        await page.locator('.task-card').first().getByRole('button', { name: '编辑', exact: true }).click();
+        assert.equal(await editTitle.inputValue(), beforeEdit, '放弃修改不能写入服务器。');
+        await page.locator('#closeTaskDialog').click();
         await page.getByRole('combobox', { name: '任务排序', exact: true }).selectOption('newest');
         assert.equal(await page.locator('.task-card strong').first().innerText(), names[7]);
         await page.getByRole('combobox', { name: '任务排序', exact: true }).selectOption('due');
@@ -278,9 +295,12 @@ try {
         await page.locator('[data-view="collaboration"]').click();
         const createPanel = page.locator('details').filter({ has: page.locator('summary', { hasText: '新建需求或任务' }) });
         const taskForm = page.locator('form[data-create-task]');
-        const requirementForm = page.locator('form').filter({ has: page.getByRole('heading', { name: '新增需求', exact: true }) });
+        const requirementForm = page.locator('form').filter({ has: page.locator('h5', { hasText: '新增需求' }) });
         await createPanel.locator('summary').click();
         await taskForm.locator('[name="title"]').fill('用户流程：待保存任务');
+        await page.locator('[data-create-kind=requirement]').click();
+        assert.equal(await taskForm.isVisible(), false, '新建区每次只显示一种表单。');
+        await createPanel.screenshot({ path: path.join(output, 'creation-panel.png') });
         await requirementForm.locator('[name="title"]').fill('用户流程：待保存需求');
         await requirementForm.locator('[name="description"]').fill('第一行背景\n第二行验收');
         await page.locator('#projectPicker').selectOption(String(second.id));
@@ -292,21 +312,42 @@ try {
         await page.locator('#refreshWorkspace').click();
         await page.waitForFunction(() => !document.querySelector('#refreshWorkspace').disabled);
         assert.equal(await taskForm.locator('[name="title"]').inputValue(), '用户流程：待保存任务', '刷新数据应保留草稿。');
-        await page.route(`**/api/projects/${project.id}/requirements`, route => {
+        let releaseSave;
+        let saveStarted;
+        let saveRequests = 0;
+        const savePending = new Promise(resolve => { releaseSave = resolve; });
+        const saveIntercepted = new Promise(resolve => { saveStarted = resolve; });
+        await page.route(`**/api/projects/${project.id}/requirements`, async route => {
             if (route.request().method() === 'POST') {
+                saveRequests += 1;
+                saveStarted();
+                await savePending;
                 return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '暂时无法保存' }) });
             }
             return route.continue();
         });
         await requirementForm.getByRole('button', { name: '保存需求' }).click();
+        await saveIntercepted;
+        assert.equal(await requirementForm.getByRole('button', { name: '保存中…' }).isDisabled(), true);
+        await requirementForm.evaluate(form => form.requestSubmit());
+        assert.equal(saveRequests, 1, '保存中重复提交不得发送第二次请求。');
+        releaseSave();
         await requirementForm.locator('[data-form-error]').filter({ hasText: '暂时无法保存' }).waitFor();
         assert.equal(await requirementForm.locator('[name="title"]').inputValue(), '用户流程：待保存需求');
         assert.equal(await requirementForm.getByRole('button', { name: '保存需求' }).isEnabled(), true);
+        assert.equal(await page.locator('#notice').evaluate(notice => {
+            const rect = notice.getBoundingClientRect();
+            return getComputedStyle(notice).position === 'fixed' && rect.bottom <= innerHeight && rect.top >= 0;
+        }), true, '操作反馈应在当前视口内可见。');
+        await page.getByRole('button', { name: '关闭提示', exact: true }).click();
+        assert.equal(await page.locator('#notice').textContent(), '');
         await page.unroute(`**/api/projects/${project.id}/requirements`);
         await requirementForm.getByRole('button', { name: '保存需求' }).click();
         await page.waitForFunction(() => document.querySelector('form[data-create-task] [name="requirement_id"]')?.options.length === 3);
         assert.equal(await requirementForm.locator('[name="title"]').inputValue(), '', '成功提交的草稿应清除。');
         assert.equal(await taskForm.locator('[name="title"]').inputValue(), '用户流程：待保存任务', '保存需求不能清空另一张表单的任务草稿。');
+        await page.locator('[data-create-kind=task]').click();
+        assert.equal(await requirementForm.isVisible(), false);
         await taskForm.locator('[name="requirement_id"]').selectOption({ label: '用户流程：待保存需求' });
         await page.locator('[data-scope="mine"]').click();
         await page.getByRole('searchbox', { name: '搜索任务', exact: true }).fill('不会匹配新任务');
