@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import secrets
 import socket
+import sqlite3
 import threading
 import time
 from urllib.parse import parse_qs, urlparse
@@ -184,6 +185,8 @@ class Handler(BaseHTTPRequestHandler):
             return result
 
         def reject_constant(value):
+            # 仅拒绝非标准字面量 NaN/Infinity/-Infinity；
+            # 标准 JSON 的 true/false/null 由 json 模块内部处理，不应在此被拦截。
             raise ValueError('Nonstandard JSON constant')
 
         try:
@@ -354,6 +357,22 @@ class Handler(BaseHTTPRequestHandler):
             self.reply({'error': str(exc)}, exc.status)
         except (ConnectionError, TimeoutError):
             logging.warning('Request interrupted or timed out: %s', sanitize_log(self.path))
+        except sqlite3.IntegrityError as exc:
+            # 客户端数据冲突（唯一约束、外键约束等）：是请求数据问题，不是服务器故障，
+            # 应返回 409 让前端区分“请检查输入”，而非暴露 500 内部错误。
+            logging.warning('Database integrity conflict: %s %s (%s)',
+                            method, sanitize_log(self.path), type(exc).__name__)
+            self.reply({'error': '请求与现有数据冲突，请检查输入后重试。'}, 409)
+        except sqlite3.OperationalError as exc:
+            # 多为瞬时问题（如 database is locked），短暂重试即可恢复；其余运维错误仍按 500 处理。
+            message = str(exc)
+            if 'locked' in message.lower():
+                logging.warning('Database locked: %s %s', method, sanitize_log(self.path))
+                self.reply({'error': '服务暂时繁忙，请稍后重试。'}, 503)
+            else:
+                logging.exception('Unhandled database operational error: %s %s',
+                                  method, sanitize_log(self.path))
+                self.reply({'error': '服务器内部错误，请稍后重试。'}, 500)
         except Exception:
             logging.exception('Unhandled request error: %s %s', method, sanitize_log(self.path))
             self.reply({'error': '服务器内部错误，请稍后重试。'}, 500)

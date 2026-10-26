@@ -8,6 +8,7 @@ import tempfile
 import threading
 import unittest
 import socket
+import sqlite3
 from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
 from unittest.mock import Mock, patch
@@ -225,6 +226,45 @@ class HttpTests(unittest.TestCase):
             status, body = self.req(self.admin, '/api/projects')
         self.assertEqual(status, 500)
         self.assertNotIn('secret', body['error'])
+
+    def test_database_integrity_error_maps_to_409_not_500(self):
+        """客户端数据冲突（唯一/外键约束）应返回 409，而非暴露 500 内部错误。"""
+        self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
+        with patch.object(self.server.store, 'list_projects',
+                          side_effect=sqlite3.IntegrityError('UNIQUE constraint failed: roles.name')), \
+                self.assertLogs(level='WARNING'):
+            status, body = self.req(self.admin, '/api/projects')
+        self.assertEqual(status, 409)
+        self.assertNotIn('UNIQUE', body['error'])
+
+    def test_database_locked_maps_to_503_not_500(self):
+        """瞬时数据库锁应返回 503（可重试），而非 500。"""
+        self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
+        with patch.object(self.server.store, 'list_projects',
+                          side_effect=sqlite3.OperationalError('database is locked')), \
+                self.assertLogs(level='WARNING'):
+            status, body = self.req(self.admin, '/api/projects')
+        self.assertEqual(status, 503)
+        self.assertNotIn('locked', body['error'])
+
+    def test_standard_json_literals_are_accepted(self):
+        """true/false/null 是标准 JSON 字面量，不应被解析阶段拒绝（NaN/Infinity 仍拒）。"""
+        token = self.csrf_token(self.member)
+        for body in [
+            b'{"email":"a@b.c","password":"x","accept":true}',
+            b'{"email":"a@b.c","password":"x","flag":false}',
+            b'{"email":"a@b.c","password":"x","note":null}',
+        ]:
+            with self.subTest(body=body[:40]):
+                request = Request(self.base + '/api/setup', data=body, headers={
+                    'Content-Type': 'application/json', 'X-CSRF-Token': token,
+                })
+                with self.assertRaises(HTTPError) as failure:
+                    self.member.open(request, timeout=3)
+                with failure.exception as response:
+                    error = json.load(response)['error']
+                # 解析成功：错误来自业务校验（邮箱/密码），而非 JSON 格式。
+                self.assertNotEqual(error, 'JSON 格式不合法。')
 
     def test_unauthenticated_api_and_server_isolated_sessions(self):
         self.assertEqual(self.req(self.member, '/api/projects')[0], 401)

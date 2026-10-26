@@ -261,6 +261,13 @@ class StoreTests(unittest.TestCase):
         self.store.set_permissions(role['id'], ['workitems.manage'])
         self.assertEqual(set(self.store.list_roles()[0]['permissions']), {'project.view', 'workitems.manage'})
 
+    def test_empty_permissions_still_retain_view(self):
+        """即便传入空权限列表，角色也必须至少保留 project.view，避免成员被整组锁死。"""
+        role = self.store.create_role('空权限角色')
+        self.store.set_permissions(role['id'], [])
+        roles = {row['id']: row for row in self.store.list_roles()}
+        self.assertEqual(set(roles[role['id']]['permissions']), {'project.view'})
+
     def test_stale_and_missing_versions_do_not_change_task(self):
         project = self.store.create_project('项目')
         task = self.store.create_task(project['id'], '原任务', None, None, None, self.admin['id'])
