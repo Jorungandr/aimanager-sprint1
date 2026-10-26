@@ -360,3 +360,58 @@
         line-height: 1.75;
     }
 }
+
+/* 新建区每次呈现一种表单，控件沿用工作台统一圆角和间距。 */
+.workitem-forms {
+    grid-template-columns: minmax(0, 1fr);
+}
+.creation-switch {
+    display: flex;
+    gap: var(--control-gap);
+}
+.creation-switch button {
+    border-radius: var(--control-radius);
+}
+.creation-switch button[aria-pressed="true"] {
+    color: var(--accent-strong);
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
+.workitem-forms form {
+    border-radius: var(--panel-radius);
+}
+#notice:not(:empty) {
+    position: fixed;
+    z-index: 50;
+    right: 24px;
+    bottom: 20px;
+    width: min(420px, calc(100vw - 32px));
+    max-height: 35vh;
+    overflow: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0;
+    padding: 14px 16px;
+    border: 1px solid var(--line-strong);
+    box-shadow: 0 6px 24px rgb(29 49 39 / 14%);
+    border-radius: var(--panel-radius);
+    font-size: 14px;
+}
+#notice .notice-dismiss {
+    flex: none;
+    margin-left: auto;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 4px 8px;
+    color: inherit;
+    background: transparent;
+    border: 1px solid currentColor;
+    border-radius: var(--control-radius);
+}
+@media (max-width: 700px) {
+    #notice:not(:empty) {
+        right: 16px;
+        bottom: max(16px, env(safe-area-inset-bottom));
+    }
+}

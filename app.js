@@ -9,6 +9,8 @@ const filters = new Map();
 /* 折叠面板展开状态：仅页面内存，按项目隔离；退出登录时随 filters 一起清空，不恢复旧账号界面状态 */
 const panelState = new Map();
 const creationDrafts = new Map();
+const dialogSnapshots = new WeakMap();
+let noticeTimer;
 function panelOpen(projectId, name) {
   return panelState.get(projectId)?.[name] === true;
 }
@@ -130,8 +132,22 @@ async function api(path, options = {}) {
 }
 function say(message, error = false) {
   const notice = $('notice');
-  notice.textContent = message;
-  notice.className = error ? 'error' : 'ok';
+    clearTimeout(noticeTimer);
+    notice.replaceChildren(document.createTextNode(message));
+    notice.className = error ? 'error' : 'ok';
+    if (message) {
+        const dismiss = el('button', 'notice-dismiss', '关闭');
+        dismiss.type = 'button';
+        dismiss.setAttribute('aria-label', '关闭提示');
+        dismiss.addEventListener('click', () => {
+            clearTimeout(noticeTimer);
+            notice.replaceChildren();
+        });
+        notice.append(dismiss);
+        if (!error) {
+            noticeTimer = setTimeout(() => notice.replaceChildren(), 7000);
+        }
+    }
 }
 /* 进行中保护：请求期间禁用按钮，防止连点产生重复写请求。
    失败/取消路径都不会残留禁用态；refresh() 重建 DOM 后旧按钮已脱离页面，无需也不应再改它的状态。 */
@@ -165,6 +181,11 @@ async function submit(form, path, after, method = 'POST') {
   }
   problem.textContent = '';
   const buttons = [...form.querySelectorAll('button')];
+  const labels = buttons.map(button => button.textContent);
+  const saveButton = form.querySelector('button:not([type]), button[type=submit]');
+  if (saveButton) {
+    saveButton.textContent = '保存中…';
+  }
   buttons.forEach(button => { button.disabled = true; });
   try {
     const created = await api(path, { method, body: JSON.stringify(formData(form)) });
@@ -196,7 +217,7 @@ async function submit(form, path, after, method = 'POST') {
     say(error.message, true);
   } finally {
     delete form.dataset.submitting;
-    buttons.forEach(button => { button.disabled = false; });
+    buttons.forEach((button, index) => { button.disabled = false; button.textContent = labels[index]; });
   }
 }
 function cell(text) { const td = document.createElement('td'); td.textContent = text; return td; }
@@ -472,6 +493,7 @@ function renderProjectIntroduction(card, project, members, requirements, tasks, 
     action.addEventListener('click', () => {
         if (canManage) {
             const form = card.querySelector('[data-create-task]');
+            card.querySelector('[data-create-kind=task]')?.click();
             const details = form.closest('details');
             details.open = true;
             recordPanel(project.id, 'create', true);
@@ -733,7 +755,33 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
     createSummary.textContent = '新建需求或任务';
     retainCreationDraft(requirementForm, project.id, 'requirement');
     retainCreationDraft(taskForm, project.id, 'task');
-    forms.append(requirementForm, taskForm);
+    const choices = el('div', 'creation-switch');
+    choices.setAttribute('role', 'group');
+    choices.setAttribute('aria-label', '选择新建内容');
+    const creationState = panelState.get(project.id) || {};
+    let kind = creationState.creationKind || 'task';
+    const choicesMap = new Map();
+    const selectKind = next => {
+        kind = next;
+        const state = panelState.get(project.id) || {};
+        state.creationKind = kind;
+        panelState.set(project.id, state);
+        requirementForm.hidden = kind !== 'requirement';
+        taskForm.hidden = kind !== 'task';
+        for (const [key, button] of choicesMap) {
+            button.setAttribute('aria-pressed', String(key === kind));
+        }
+    };
+    for (const [key, label] of [['task', '创建任务'], ['requirement', '创建需求']]) {
+        const button = el('button', 'secondary', label);
+        button.type = 'button';
+        button.dataset.createKind = key;
+        button.addEventListener('click', () => selectKind(key));
+        choicesMap.set(key, button);
+        choices.append(button);
+    }
+    selectKind(kind);
+    forms.append(choices, requirementForm, taskForm);
     forms.append(el('p', 'hint creation-draft-hint', '切换项目或刷新数据时保留未提交内容；重新加载页面或退出登录后清除。'));
     createDetails.append(createSummary, forms);
     card.append(createDetails);
@@ -972,6 +1020,7 @@ function renderWorkItems(card, project, members, requirements, tasks, canManage)
 function openDialog(id, focusName) {
   dialogOpener = document.activeElement;
   const dialog = $(id);
+  dialogSnapshots.set(dialog.querySelector('form'), JSON.stringify(formData(dialog.querySelector('form'))));
   if (!dialog.open) dialog.showModal();
   const field = focusName ? dialog.querySelector(`[name="${focusName}"]`) : null;
   // 焦点落在标题输入框而不是“关闭”，键盘用户可直接编辑
@@ -988,8 +1037,20 @@ function closeDialog(id) {
     dialog.close();
   }
 }
+function requestDialogClose(id) {
+    const form = $(id).querySelector('form');
+    const changed = JSON.stringify(formData(form)) !== dialogSnapshots.get(form);
+    if (changed && !confirm('有尚未保存的修改。确定放弃并关闭吗？')) {
+        return;
+    }
+    closeDialog(id);
+}
 /* Esc 与按钮关闭都经由此处归还焦点，键盘用户不会丢位置 */
 for (const id of ['taskDialog', 'requirementDialog']) {
+  $(id).addEventListener('cancel', event => {
+    event.preventDefault();
+    requestDialogClose(id);
+  });
   $(id).addEventListener('close', () => {
     if ($(id).open) {
       return;
@@ -1010,7 +1071,10 @@ function resetDialog(formId, errorId) {
   if (refreshButton) refreshButton.hidden = true;
   // 上一轮冲突可能留下禁用的提交按钮，重新打开时要恢复可提交
   const submitButton = form.querySelector('[type="submit"]');
-  if (submitButton) submitButton.disabled = false;
+  if (submitButton) {
+    submitButton.disabled = false;
+    submitButton.textContent = '保存修改';
+  }
   const error = $(errorId);
   error.textContent = '';
 }
@@ -1049,7 +1113,7 @@ function openRequirementEditor(project, requirement) {
   form.elements.description.value = requirement.description || '';
   openDialog('requirementDialog', 'title');
 }
-$('closeRequirementDialog').addEventListener('click', () => closeDialog('requirementDialog'));
+$('closeRequirementDialog').addEventListener('click', () => requestDialogClose('requirementDialog'));
 $('editRequirementForm').addEventListener('submit', async event => {
   event.preventDefault();
   if (!editingRequirement) return;
@@ -1060,6 +1124,7 @@ $('editRequirementForm').addEventListener('submit', async event => {
   }
   const context = editingRequirement;
   button.disabled = true;
+  button.textContent = '保存中…';
   try {
     const data = formData(form);
     data.version = context.requirement.version;
@@ -1077,6 +1142,7 @@ $('editRequirementForm').addEventListener('submit', async event => {
   } finally {
     if (editingRequirement === context) {
       button.disabled = form.dataset.conflict === 'true';
+      button.textContent = '保存修改';
     }
   }
 });
@@ -1097,7 +1163,7 @@ function openTaskEditor(project, task, members, requirements) {
   form.elements.status.value = task.status;
   openDialog('taskDialog', 'title');
 }
-$('closeTaskDialog').addEventListener('click', () => closeDialog('taskDialog'));
+$('closeTaskDialog').addEventListener('click', () => requestDialogClose('taskDialog'));
 $('editTaskForm').addEventListener('submit', async event => {
   event.preventDefault();
   if (!editingTask) return;
@@ -1108,6 +1174,7 @@ $('editTaskForm').addEventListener('submit', async event => {
   }
   const context = editingTask;
   button.disabled = true;
+  button.textContent = '保存中…';
   try {
     await api(`/api/projects/${context.project.id}/tasks/${context.task.id}`, { method: 'PUT', body: JSON.stringify({ ...formData(form), version: context.task.version }) });
     if (editingTask !== context) {
@@ -1123,6 +1190,7 @@ $('editTaskForm').addEventListener('submit', async event => {
   } finally {
     if (editingTask === context) {
       button.disabled = form.dataset.conflict === 'true';
+      button.textContent = '保存修改';
     }
   }
 });

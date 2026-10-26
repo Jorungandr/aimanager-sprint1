@@ -99,6 +99,7 @@ try {
     await waitButtonState('#refreshWorkspace', true);
     await waitButtonState('#refreshWorkspace', false);
     await ensureOpen('新建需求或任务');
+    await page.locator('[data-create-kind=requirement]').click();
     const requirementForm = page.locator('.workitem-forms form').first();
     await requirementForm.locator('[name=title]').fill('Lifecycle requirement');
     const saveRequirement = requirementForm.getByRole('button', { name: '保存需求', exact: true });
@@ -178,6 +179,7 @@ try {
             assert.equal(await form.locator('[type=submit]').isEnabled(), true);
             assert.equal(await errorBox.textContent(), '');
             await page.unroute(pattern);
+            page.once('dialog', dialog => dialog.accept());
             await page.keyboard.press('Escape');
         }
     }

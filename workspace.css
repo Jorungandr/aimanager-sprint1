@@ -11,6 +11,9 @@
     --accent: #236b60;
     --accent-strong: #174f46;
     --accent-soft: #eaf2ed;
+    --control-radius: 8px;
+    --panel-radius: 12px;
+    --control-gap: 10px;
     --shadow-sm: none;
     --shadow-md: 0 4px 12px rgb(29 49 39 / 6%);
 }
@@ -402,13 +405,13 @@ input::placeholder, textarea::placeholder {
 }
 input, select, textarea {
     border-color: var(--line-strong);
-    border-radius: 6px;
+    border-radius: var(--control-radius);
 }
 input:focus, select:focus {
     box-shadow: none;
 }
 button {
-    border-radius: 6px;
+    border-radius: var(--control-radius);
     font-weight: 500;
 }
 button.secondary {
@@ -523,7 +526,7 @@ button.kpi:hover {
 }
 #notice:not(:empty), .dialog-error:not(:empty), .callout {
     border-left: 0;
-    border-radius: 6px;
+    border-radius: var(--control-radius);
 }
 #notice:not(:empty) {
     margin-bottom: 18px;
