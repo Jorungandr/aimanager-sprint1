@@ -172,6 +172,7 @@ async function main() {
         await viewerPage.getByRole('heading', { name: fixtures.project.name }).waitFor();
         await viewerPage.locator('.task-card').getByText(fixtures.task.title, { exact: true }).waitFor();
         assert.equal(await viewerPage.locator('.workitem-forms').count(), 0, '只读成员不应看到新增需求或任务表单。');
+        assert.equal(await viewerPage.locator('[data-home-create]').count(), 0, '只读成员首页不得出现创建入口。');
         assert.equal(await viewerPage.locator('.project button.danger').count(), 0, '只读成员不应看到成员移除按钮。');
         assert.equal(await viewerPage.locator('.task-card[draggable="true"]').count(), 0, '只读成员的任务卡不得可拖动。');
 

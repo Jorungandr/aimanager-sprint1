@@ -1,0 +1,350 @@
+/* 首页围绕用户下一步安排信息，视觉与任务工作区分开维护。 */
+.home-eyebrow {
+    display: block;
+    margin-bottom: 12px;
+    color: #526e60;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .08em;
+}
+.project > .workspace-introduction {
+    grid-template-areas: "hero focus" "metrics metrics";
+    gap: 18px;
+    margin-bottom: 26px;
+}
+.project-hero {
+    grid-area: hero;
+    border: 1px solid #e4dfd2;
+    border-radius: 18px;
+    min-height: 306px;
+}
+.project-hero-content {
+    width: 60%;
+    padding: 28px 0 26px 28px;
+}
+.project-hero-content h3 {
+    font-size: clamp(24px, 2.3vw, 32px);
+    letter-spacing: -.035em;
+    line-height: 1.35;
+    font-weight: 700;
+}
+.project-hero-message {
+    font-size: 14px;
+    line-height: 1.8;
+    max-width: 30ch;
+}
+.home-hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    align-items: center;
+}
+.hero-action {
+    min-height: 44px;
+    background: #235c4c;
+    border-color: #235c4c;
+    color: #fff;
+    font-size: 14px;
+    border-radius: 8px;
+    box-shadow: 0 3px 9px rgb(28 66 51 / 12%);
+}
+.hero-action:hover {
+    color: #fff;
+    background: #184d3e;
+}
+.home-text-action {
+    min-height: 44px;
+    padding: 6px 0;
+    border: 0;
+    background: transparent;
+    color: #284e40;
+    font-size: 13px;
+    text-decoration: underline;
+    text-underline-offset: 4px;
+    box-shadow: none;
+}
+.home-text-action:hover {
+    background: transparent;
+    color: #123c2c;
+}
+.project-focus {
+    grid-area: focus;
+    background: #fffefa;
+    border-color: #e4dfd2;
+    border-radius: 18px;
+    padding: 22px;
+}
+.home-metrics {
+    grid-area: metrics;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+}
+.home-metric {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px 12px;
+    align-items: center;
+    padding: 18px 20px;
+    min-width: 0;
+    text-align: left;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 2px 6px rgb(34 58 43 / 3%);
+    transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+.home-metric:hover {
+    background: #fff;
+    border-color: #91ac9d;
+    box-shadow: 0 5px 14px rgb(34 58 43 / 7%);
+    transform: translateY(-2px);
+}
+.home-metric-label {
+    font-size: 14px;
+    font-weight: 600;
+}
+.home-metric strong {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    font-size: 32px;
+    font-weight: 600;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    color: #235c4c;
+}
+.home-metric-note {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+.home-metric-overdue {
+    background: #fffaf6;
+    border-color: #eadbcd;
+}
+.home-metric-overdue strong {
+    color: #9b4a38;
+}
+.home-metric-due_soon strong {
+    color: #92651e;
+}
+.project > .home-launchpad {
+    order: 0;
+    margin-bottom: 8px;
+}
+.home-section-heading {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 6px 16px;
+    margin-bottom: 14px;
+}
+.home-section-heading h4 {
+    font-size: 17px;
+    margin: 0;
+}
+.home-section-heading p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 12px;
+}
+.home-entry-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+}
+.home-entry {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-content: start;
+    gap: 6px 12px;
+    border: 1px solid var(--line);
+    padding: 18px;
+    border-radius: 12px;
+    background: #fdfefa;
+    min-width: 0;
+}
+.home-step-number {
+    grid-row: 1 / span 3;
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    color: #476657;
+    background: #edf1e8;
+    border-radius: 9px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+.home-entry h5 {
+    margin: 3px 0 0;
+    font-size: 15px;
+    color: #233d31;
+}
+.home-entry p {
+    grid-column: 2;
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.7;
+}
+.home-entry-action {
+    grid-column: 2;
+    justify-self: start;
+    padding: 5px 0;
+    min-height: 44px;
+    border: 0;
+    background: transparent;
+    color: #216858;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: left;
+}
+.home-entry-action:hover {
+    background: transparent;
+    color: #124735;
+    text-decoration: underline;
+    text-underline-offset: 4px;
+}
+.welcome-empty.empty-state {
+    display: block;
+    justify-items: start;
+    text-align: left;
+    max-width: 960px;
+    padding: 40px;
+    margin: 12px 0;
+    background: #fffdf8;
+    border: 1px solid #e3decf;
+    border-radius: 18px;
+}
+.welcome-empty.empty-state::before {
+    display: none;
+}
+.welcome-empty h3 {
+    max-width: none;
+    font-size: 28px;
+    line-height: 1.5;
+    color: #234d3b;
+    margin-bottom: 12px;
+}
+.welcome-description {
+    max-width: none;
+    color: #526257;
+    font-size: 14px;
+    line-height: 1.8;
+}
+.welcome-steps {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    padding: 22px 0;
+    margin: 0;
+    list-style: none;
+    counter-reset: welcome;
+}
+.welcome-steps li {
+    counter-increment: welcome;
+    display: grid;
+    align-content: start;
+    gap: 8px;
+    padding: 16px;
+    border: 1px solid #e4e7dc;
+    border-radius: 10px;
+    background: #f6f8f0;
+}
+.welcome-steps li::before {
+    content: counter(welcome, decimal-leading-zero);
+    color: #758b79;
+    font-size: 13px;
+}
+.welcome-steps strong {
+    color: #2e4837;
+    font-size: 15px;
+}
+.welcome-steps span, .welcome-note {
+    font-size: 13px;
+    line-height: 1.8;
+}
+.welcome-start {
+    min-height: 46px;
+    padding-inline: 22px;
+    background: #235c4c;
+}
+.board, .board-empty {
+    scroll-margin-block: 24px;
+}
+@media (max-width: 800px) {
+    .project > .workspace-introduction {
+        grid-template-areas: "hero" "metrics" "focus";
+        gap: 14px;
+    }
+    .home-metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .home-entry-grid, .welcome-steps {
+        grid-template-columns: 1fr;
+    }
+    .home-entry {
+        padding: 14px 16px;
+    }
+    .home-entry p {
+        font-size: 13px;
+    }
+    .home-entry-action {
+        min-height: 44px;
+    }
+    .welcome-empty.empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        padding: 24px;
+    }
+    .welcome-start {
+        order: 1;
+        align-self: flex-start;
+        margin-top: 16px;
+    }
+    .welcome-steps {
+        order: 2;
+    }
+    .welcome-empty h3 {
+        font-size: 24px;
+    }
+}
+@media (max-width: 420px) {
+    .project-hero-content {
+        width: 72%;
+        padding: 22px 0 22px 20px;
+    }
+    .project-hero-art {
+        object-position: 75% center;
+        opacity: .45;
+    }
+    .project-hero-message {
+        font-size: 14px;
+    }
+    .home-metric {
+        padding: 14px 12px;
+        gap: 6px;
+    }
+    .home-metric strong {
+        font-size: 27px;
+    }
+    .home-metric-label {
+        font-size: 13px;
+    }
+    .home-metric-note {
+        font-size: 11px;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .home-metric {
+        transition: none;
+    }
+    .home-metric:hover {
+        transform: none;
+    }
+}

@@ -47,3 +47,9 @@ test('sorting and filtering never mutate the project task array', () => {
     assert.deepEqual(selectTaskView(tasks, requirements, { sort: 'newest' }, 7, window).map(task => task.id), [4, 3, 2, 1]);
     assert.deepEqual(tasks, before);
 });
+
+test('open scope excludes finished work and combines with other filters', () => {
+    assert.deepEqual(selectTaskView(tasks, requirements, { scope: 'open' }, 7, window).map(task => task.id), [3, 1, 4]);
+    assert.deepEqual(selectTaskView(tasks, requirements, { scope: 'open', assignee: '7' }, 7, window).map(task => task.id), [3]);
+    assert.equal(matchesTaskScope({ status: 'done' }, 'open', 7, window), false);
+});
