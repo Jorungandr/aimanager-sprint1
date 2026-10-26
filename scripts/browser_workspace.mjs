@@ -141,6 +141,26 @@ try {
             assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false,
                 `${width}px 列表视图不应出现页面横向溢出。`);
         }
+        const comfort = await page.locator('.task-card').first().evaluate(card => {
+            const actions = card.querySelector('.task-actions');
+            const select = actions.querySelector('select');
+            const button = actions.querySelector('button');
+            const first = select.getBoundingClientRect();
+            const second = button.getBoundingClientRect();
+            return {
+                sameRow: Math.abs(first.top - second.top) < 2,
+                controlSize: parseFloat(getComputedStyle(select).fontSize),
+                titleSize: parseFloat(getComputedStyle(card.querySelector('strong')).fontSize),
+            };
+        });
+        assert.equal(comfort.sameRow, true, '手机卡片操作应并排，减少滚动距离。');
+        assert.ok(comfort.controlSize >= 16, '手机表单字号至少16px，避免聚焦时放大页面。');
+        assert.ok(comfort.titleSize >= 15, '手机任务标题应清晰可读。');
+        await page.locator('.task-card').first().screenshot({ path: path.join(output, 'task-mobile-detail.png') });
+        await page.locator('.task-card').first().getByRole('button', { name: '编辑', exact: true }).click();
+        await page.locator('#taskDialog').waitFor({ state: 'visible' });
+        await page.locator('#taskDialog').screenshot({ path: path.join(output, 'editor-mobile-detail.png') });
+        await page.locator('#closeTaskDialog').click();
         await page.screenshot({ path: path.join(output, 'list-mobile.png'), fullPage: true });
         await page.setViewportSize({ width: 1440, height: 960 });
         await page.getByRole('button', { name: '看板视图', exact: true }).click();
@@ -318,6 +338,11 @@ try {
         await page.locator('[data-view="collaboration"]').click();
         assert.equal(await page.locator('#navToggle').getAttribute('aria-expanded'), 'false');
         await page.locator('.task-card').first().waitFor();
+        assert.equal(await page.locator('.task-actions').first().evaluate(actions => {
+            const select = actions.querySelector('select').getBoundingClientRect();
+            const button = actions.querySelector('button').getBoundingClientRect();
+            return Math.abs(select.top - button.top) < 2;
+        }), true, '窄屏看板操作也应保持同一行。');
         await page.screenshot({ path: path.join(output, 'board-mobile.png'), fullPage: true });
         await page.locator('.project-hero').screenshot({ path: path.join(output, 'project-cover-mobile.png') });
         let releaseAccount;
