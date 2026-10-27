@@ -236,9 +236,9 @@ class Store:
         if not isinstance(permissions, list) or any(p not in PERMISSIONS for p in permissions):
             raise AppError('权限项不合法。')
         permissions = set(permissions)
-        # 每个角色至少保留 project.view：避免管理员误将角色权限整体清空，
-        # 导致被指派该角色的成员彻底无法访问项目（锁死）。
-        permissions.add('project.view')
+        # 管理权限依赖查看权限；空列表仍表示撤销该角色全部权限。
+        if permissions:
+            permissions.add('project.view')
         if actor is not None:
             if not self.has_global_permission(actor, 'roles.manage'):
                 raise AppError('需要角色管理权限。', 403)

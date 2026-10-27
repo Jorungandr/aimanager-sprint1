@@ -157,6 +157,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Set-Cookie', f'sid={cookie}; HttpOnly; SameSite=Strict; Path=/')
         if status == 429:
             self.send_header('Retry-After', str(self._retry_after))
+        elif status == 503:
+            self.send_header('Retry-After', '1')
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -365,8 +367,14 @@ class Handler(BaseHTTPRequestHandler):
             self.reply({'error': '请求与现有数据冲突，请检查输入后重试。'}, 409)
         except sqlite3.OperationalError as exc:
             # 多为瞬时问题（如 database is locked），短暂重试即可恢复；其余运维错误仍按 500 处理。
-            message = str(exc)
-            if 'locked' in message.lower():
+            code = getattr(exc, 'sqlite_errorcode', None)
+            primary_code = code & 255 if isinstance(code, int) else None
+            transient = primary_code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+            if primary_code is None:
+                transient = str(exc).lower() in (
+                    'database is locked', 'database table is locked',
+                    'database schema is locked', 'database is busy')
+            if transient:
                 logging.warning('Database locked: %s %s', method, sanitize_log(self.path))
                 self.reply({'error': '服务暂时繁忙，请稍后重试。'}, 503)
             else:

@@ -262,9 +262,30 @@ class HttpTests(unittest.TestCase):
                 with self.assertRaises(HTTPError) as failure:
                     self.member.open(request, timeout=3)
                 with failure.exception as response:
+                    self.assertEqual(response.code, 400)
                     error = json.load(response)['error']
                 # 解析成功：错误来自业务校验（邮箱/密码），而非 JSON 格式。
-                self.assertNotEqual(error, 'JSON 格式不合法。')
+                self.assertEqual(error, '密码长度应为 8 至 128 个字符。')
+
+    def test_busy_error_code_returns_retryable_503(self):
+        self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
+        error = sqlite3.OperationalError('localized database message')
+        error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+        with patch.object(self.server.store, 'list_projects', side_effect=error), self.assertLogs(level='WARNING'):
+            with self.assertRaises(HTTPError) as failure:
+                self.admin.open(self.base + '/api/projects')
+            with failure.exception as response:
+                self.assertEqual(response.code, 503)
+                self.assertEqual(response.headers['Retry-After'], '1')
+                self.assertNotIn('localized', json.load(response)['error'])
+
+    def test_missing_table_named_locked_is_not_a_retryable_lock(self):
+        self.req(self.admin, '/api/setup', 'POST', {'email': 'admin@example.test', 'password': 'AdminPass123'})
+        error = sqlite3.OperationalError('no such table: locked_archive')
+        with patch.object(self.server.store, 'list_projects', side_effect=error), self.assertLogs(level='ERROR'):
+            status, body = self.req(self.admin, '/api/projects')
+        self.assertEqual(status, 500)
+        self.assertNotIn('locked_archive', body['error'])
 
     def test_unauthenticated_api_and_server_isolated_sessions(self):
         self.assertEqual(self.req(self.member, '/api/projects')[0], 401)

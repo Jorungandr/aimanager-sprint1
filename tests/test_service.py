@@ -261,12 +261,21 @@ class StoreTests(unittest.TestCase):
         self.store.set_permissions(role['id'], ['workitems.manage'])
         self.assertEqual(set(self.store.list_roles()[0]['permissions']), {'project.view', 'workitems.manage'})
 
-    def test_empty_permissions_still_retain_view(self):
-        """即便传入空权限列表，角色也必须至少保留 project.view，避免成员被整组锁死。"""
-        role = self.store.create_role('空权限角色')
-        self.store.set_permissions(role['id'], [])
+    def test_empty_permissions_revoke_project_access(self):
+        """管理员清空权限后，既有成员立即失去项目访问权。"""
+        member = self.store.create_user('revoke@example.test', 'MemberPass123')
+        role = self.store.create_role('可撤销角色')
+        self.store.set_permissions(role['id'], ['project.view'], actor=self.admin)
+        project = self.store.create_project('权限回收')
+        self.store.add_member(project['id'], member['id'], role['id'])
+        self.assertTrue(self.store.has_permission(member, project['id'], 'project.view'))
+        self.store.set_permissions(role['id'], [], actor=self.admin)
         roles = {row['id']: row for row in self.store.list_roles()}
-        self.assertEqual(set(roles[role['id']]['permissions']), {'project.view'})
+        self.assertEqual(roles[role['id']]['permissions'], [])
+        self.assertEqual(self.store.list_projects(member), [])
+        with self.assertRaises(AppError) as denied:
+            self.store.require_permission(member, project['id'], 'project.view')
+        self.assertEqual(denied.exception.status, 403)
 
     def test_stale_and_missing_versions_do_not_change_task(self):
         project = self.store.create_project('项目')
