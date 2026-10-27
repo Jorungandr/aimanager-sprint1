@@ -236,6 +236,7 @@ class Store:
         if not isinstance(permissions, list) or any(p not in PERMISSIONS for p in permissions):
             raise AppError('权限项不合法。')
         permissions = set(permissions)
+        # 管理权限依赖查看权限；空列表仍表示撤销该角色全部权限。
         if permissions:
             permissions.add('project.view')
         if actor is not None:

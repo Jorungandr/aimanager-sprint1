@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import secrets
 import socket
+import sqlite3
 import threading
 import time
 from urllib.parse import parse_qs, urlparse
@@ -156,6 +157,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Set-Cookie', f'sid={cookie}; HttpOnly; SameSite=Strict; Path=/')
         if status == 429:
             self.send_header('Retry-After', str(self._retry_after))
+        elif status == 503:
+            self.send_header('Retry-After', '1')
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -184,6 +187,8 @@ class Handler(BaseHTTPRequestHandler):
             return result
 
         def reject_constant(value):
+            # 仅拒绝非标准字面量 NaN/Infinity/-Infinity；
+            # 标准 JSON 的 true/false/null 由 json 模块内部处理，不应在此被拦截。
             raise ValueError('Nonstandard JSON constant')
 
         try:
@@ -354,6 +359,28 @@ class Handler(BaseHTTPRequestHandler):
             self.reply({'error': str(exc)}, exc.status)
         except (ConnectionError, TimeoutError):
             logging.warning('Request interrupted or timed out: %s', sanitize_log(self.path))
+        except sqlite3.IntegrityError as exc:
+            # 客户端数据冲突（唯一约束、外键约束等）：是请求数据问题，不是服务器故障，
+            # 应返回 409 让前端区分“请检查输入”，而非暴露 500 内部错误。
+            logging.warning('Database integrity conflict: %s %s (%s)',
+                            method, sanitize_log(self.path), type(exc).__name__)
+            self.reply({'error': '请求与现有数据冲突，请检查输入后重试。'}, 409)
+        except sqlite3.OperationalError as exc:
+            # 多为瞬时问题（如 database is locked），短暂重试即可恢复；其余运维错误仍按 500 处理。
+            code = getattr(exc, 'sqlite_errorcode', None)
+            primary_code = code & 255 if isinstance(code, int) else None
+            transient = primary_code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+            if primary_code is None:
+                transient = str(exc).lower() in (
+                    'database is locked', 'database table is locked',
+                    'database schema is locked', 'database is busy')
+            if transient:
+                logging.warning('Database locked: %s %s', method, sanitize_log(self.path))
+                self.reply({'error': '服务暂时繁忙，请稍后重试。'}, 503)
+            else:
+                logging.exception('Unhandled database operational error: %s %s',
+                                  method, sanitize_log(self.path))
+                self.reply({'error': '服务器内部错误，请稍后重试。'}, 500)
         except Exception:
             logging.exception('Unhandled request error: %s %s', method, sanitize_log(self.path))
             self.reply({'error': '服务器内部错误，请稍后重试。'}, 500)
